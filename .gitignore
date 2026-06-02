@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Next.js
+frontend/.next/
+frontend/out/
+
+# Rust / Soroban
+contracts/target/
+**/*.rs.bk
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+
+# OS & editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log
