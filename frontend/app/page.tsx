@@ -1,103 +1,120 @@
-import Image from "next/image";
+import Link from "next/link";
+
+import { Navbar } from "@/src/components/Navbar";
 
 export default function Home() {
   return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+    <div className="min-h-screen bg-zinc-950 text-zinc-100">
+      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-emerald-900/30 via-zinc-950 to-zinc-950" />
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
-        </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+      <div className="relative flex min-h-screen flex-col">
+        <Navbar />
+
+        <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-12 sm:px-6 sm:py-16 lg:px-8 lg:py-20">
+          <section className="mx-auto max-w-3xl text-center">
+            <p className="mb-4 inline-flex rounded-full border border-emerald-500/30 bg-emerald-950/50 px-4 py-1 text-xs font-semibold uppercase tracking-widest text-emerald-400">
+              Verified Milestone Payouts
+            </p>
+            <h1 className="text-4xl font-bold tracking-tight text-white sm:text-5xl lg:text-6xl">
+              Trustless escrow for{" "}
+              <span className="text-emerald-400">Zambia&apos;s growers</span>
+            </h1>
+            <p className="mt-6 text-lg leading-relaxed text-zinc-400 sm:text-xl">
+              SmartProtocol Zambia locks funds on Stellar until milestones are
+              verified—protecting funders, empowering farmers, and paying vendors
+              only when proof is signed.
+            </p>
+          </section>
+
+          <section className="mt-16 grid gap-6 sm:grid-cols-2 lg:mt-20">
+            <article
+              id="funder-dashboard"
+              className="scroll-mt-24 rounded-2xl border border-emerald-800/30 bg-gradient-to-br from-emerald-950/80 to-zinc-900/80 p-6 shadow-xl shadow-black/20 sm:p-8"
+            >
+              <div className="mb-4 flex size-12 items-center justify-center rounded-xl bg-emerald-600/20 text-emerald-400">
+                <svg
+                  className="size-6"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={1.5}
+                  aria-hidden
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M2.25 18.75a60.07 60.07 0 0115.797 2.101c.727.198 1.453-.342 1.453-1.096V18.75M3.75 4.5v.75A.75.75 0 013 6h-.75m0 0v-.375c0-.621.504-1.125 1.125-1.125H20.25M3.75 6v9m0 0v1.125c0 .621.504 1.125 1.125 1.125h16.5c.621 0 1.125-.504 1.125-1.125V15M3.75 6h16.5"
+                  />
+                </svg>
+              </div>
+              <h2 className="text-xl font-semibold text-white sm:text-2xl">
+                For Funders
+              </h2>
+              <p className="mt-3 text-sm leading-relaxed text-zinc-400 sm:text-base">
+                Initialize escrows, deposit Native XLM, and release payments to
+                vendors only after beneficiaries submit verified milestone proof.
+              </p>
+              <Link
+                href="#funder-dashboard"
+                className="mt-6 inline-flex items-center text-sm font-semibold text-emerald-400 transition hover:text-emerald-300"
+              >
+                Open Funder Dashboard →
+              </Link>
+            </article>
+
+            <article
+              id="beneficiary-signoff"
+              className="scroll-mt-24 rounded-2xl border border-amber-800/25 bg-gradient-to-br from-amber-950/40 to-zinc-900/80 p-6 shadow-xl shadow-black/20 sm:p-8"
+            >
+              <div className="mb-4 flex size-12 items-center justify-center rounded-xl bg-amber-600/20 text-amber-400">
+                <svg
+                  className="size-6"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={1.5}
+                  aria-hidden
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M9 12.75L11.25 15 15 9.75M21 12c0 1.268-.63 2.39-1.593 3.068a3.745 3.745 0 01-1.043 3.296 3.745 3.745 0 01-3.296 1.043A3.745 3.745 0 0112 21c-1.268 0-2.39-.63-3.068-1.593a3.746 3.746 0 01-3.296-1.043 3.745 3.745 0 01-1.043-3.296A3.745 3.745 0 013 12c0-1.268.63-2.39 1.593-3.068a3.745 3.745 0 011.043-3.296 3.746 3.746 0 013.296-1.043A3.746 3.746 0 0112 3c1.268 0 2.39.63 3.068 1.593a3.746 3.746 0 013.296 1.043 3.746 3.746 0 011.043 3.296A3.745 3.745 0 0121 12z"
+                  />
+                </svg>
+              </div>
+              <h2 className="text-xl font-semibold text-white sm:text-2xl">
+                For Farmers &amp; Beneficiaries
+              </h2>
+              <p className="mt-3 text-sm leading-relaxed text-zinc-400 sm:text-base">
+                Submit cryptographic sign-off when milestones are complete.
+                Your proof unlocks the release path—no payouts without your
+                authorization.
+              </p>
+              <Link
+                href="#beneficiary-signoff"
+                className="mt-6 inline-flex items-center text-sm font-semibold text-amber-400 transition hover:text-amber-300"
+              >
+                Go to Beneficiary Sign-off →
+              </Link>
+            </article>
+          </section>
+
+          <section className="mt-16 rounded-2xl border border-zinc-800 bg-zinc-900/50 px-6 py-8 text-center sm:mt-20 sm:px-10">
+            <h3 className="text-lg font-semibold text-white">
+              Built on Stellar &amp; Soroban
+            </h3>
+            <p className="mx-auto mt-2 max-w-2xl text-sm text-zinc-500 sm:text-base">
+              Connect your Freighter wallet to interact with testnet escrows.
+              Week 2 brings the UI—contract flows come next.
+            </p>
+          </section>
+        </main>
+
+        <footer className="border-t border-zinc-800/80 py-6 text-center text-xs text-zinc-600">
+          © {new Date().getFullYear()} SmartProtocol Zambia · Code-verified
+          agricultural payouts
+        </footer>
+      </div>
     </div>
   );
 }
