@@ -7,6 +7,7 @@ frontend/out/
 
 # Rust / Soroban
 contracts/target/
+contracts/contracts/escrow/test_snapshots/
 **/*.rs.bk
 
 # Env & secrets
