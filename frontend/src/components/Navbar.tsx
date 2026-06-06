@@ -6,8 +6,8 @@ import { useState } from "react";
 import { WalletConnectButton } from "@/src/components/WalletConnectButton";
 
 const navLinks = [
-  { href: "#funder-dashboard", label: "Funder Dashboard" },
-  { href: "#beneficiary-signoff", label: "Beneficiary Sign-off" },
+  { href: "/funder", label: "Funder Dashboard" },
+  { href: "/beneficiary", label: "Beneficiary Sign-off" },
 ] as const;
 
 export function Navbar() {

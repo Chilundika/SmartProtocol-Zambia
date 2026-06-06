@@ -3,16 +3,12 @@ import {
   BASE_FEE,
   Contract,
   nativeToScVal,
+  rpc,
   scValToNative,
+  Transaction,
   TransactionBuilder,
-  type xdr,
+  xdr,
 } from "@stellar/stellar-sdk";
-import {
-  Api,
-  assembleTransaction,
-  parseRawSimulation,
-  Server,
-} from "@stellar/stellar-sdk/rpc";
 
 import {
   ESCROW_FACTORY_CONTRACT_ID,
@@ -55,12 +51,43 @@ export class StellarClientError extends Error {
 }
 
 const PLACEHOLDER_PREFIX = "REPLACE_WITH_";
+const STROOPS_PER_XLM = BigInt(10_000_000);
 
-let rpcServer: Server | null = null;
+/** Converts an XLM amount (bigint or number) to stroops for Soroban i128 args. */
+function xlmToStroops(amount: bigint | number): bigint {
+  if (typeof amount === "bigint") {
+    if (amount <= BigInt(0)) {
+      throw new StellarClientError(
+        "INVALID_AMOUNT",
+        "Amount must be greater than zero XLM.",
+      );
+    }
+    return amount * STROOPS_PER_XLM;
+  }
 
-function getRpcServer(): Server {
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new StellarClientError(
+      "INVALID_AMOUNT",
+      "Amount must be greater than zero XLM.",
+    );
+  }
+
+  const stroops = BigInt(Math.floor(Number(amount) * 10_000_000));
+  if (stroops <= BigInt(0)) {
+    throw new StellarClientError(
+      "INVALID_AMOUNT",
+      "Amount must be greater than zero XLM.",
+    );
+  }
+
+  return stroops;
+}
+
+let rpcServer: rpc.Server | null = null;
+
+function getRpcServer(): rpc.Server {
   if (!rpcServer) {
-    rpcServer = new Server(STELLAR_TESTNET_RPC_URL, {
+    rpcServer = new rpc.Server(STELLAR_TESTNET_RPC_URL, {
       allowHttp: STELLAR_TESTNET_RPC_URL.startsWith("http://"),
     });
   }
@@ -126,18 +153,25 @@ function proofHashToScVal(proofHash: string): xdr.ScVal {
 }
 
 function parseEscrowStatus(value: unknown): EscrowStatusOnChain {
-  if (typeof value === "string") {
+  // Rust enums often serialize to single-element arrays in JS (e.g., ["Locked"])
+  const normalizedStatus = Array.isArray(value) ? value[0] : value;
+
+  if (typeof normalizedStatus === "string") {
     if (
-      value === "Locked" ||
-      value === "Pending" ||
-      value === "Released"
+      normalizedStatus === "Locked" ||
+      normalizedStatus === "Pending" ||
+      normalizedStatus === "Released"
     ) {
-      return value;
+      return normalizedStatus;
     }
   }
 
-  if (value && typeof value === "object" && "tag" in value) {
-    const tag = (value as { tag: string }).tag;
+  if (
+    normalizedStatus &&
+    typeof normalizedStatus === "object" &&
+    "tag" in normalizedStatus
+  ) {
+    const tag = (normalizedStatus as { tag: string }).tag;
     if (tag === "Locked" || tag === "Pending" || tag === "Released") {
       return tag;
     }
@@ -158,12 +192,14 @@ function parseEscrowStruct(raw: unknown): EscrowState {
   }
 
   const record = raw as Record<string, unknown>;
+  const rawStatus = record.status;
+  const normalizedStatus = Array.isArray(rawStatus) ? rawStatus[0] : rawStatus;
 
   return {
     funder: String(record.funder),
     vendor: String(record.vendor),
     amount: BigInt(record.amount as string | number | bigint),
-    status: parseEscrowStatus(record.status),
+    status: parseEscrowStatus(normalizedStatus),
     recipient: String(record.recipient),
   };
 }
@@ -220,7 +256,7 @@ async function loadSourceAccount(publicKey: string) {
 async function simulateContractCall(
   sourcePublicKey: string,
   operation: xdr.Operation,
-): Promise<Api.SimulateTransactionResponse> {
+): Promise<rpc.Api.SimulateTransactionResponse> {
   const account = await loadSourceAccount(sourcePublicKey);
 
   const tx = new TransactionBuilder(account, {
@@ -231,7 +267,7 @@ async function simulateContractCall(
     .setTimeout(180)
     .build();
 
-  let simulation: Api.SimulateTransactionResponse;
+  let simulation: rpc.Api.SimulateTransactionResponse;
 
   try {
     simulation = await getRpcServer().simulateTransaction(tx);
@@ -243,11 +279,11 @@ async function simulateContractCall(
     );
   }
 
-  const parsed = Api.isSimulationRaw(simulation)
-    ? parseRawSimulation(simulation)
+  const parsed = rpc.Api.isSimulationRaw(simulation)
+    ? rpc.parseRawSimulation(simulation)
     : simulation;
 
-  if (Api.isSimulationError(parsed)) {
+  if (rpc.Api.isSimulationError(parsed)) {
     throw new StellarClientError(
       "SIMULATION_FAILED",
       parsed.error ?? "Contract simulation failed.",
@@ -271,11 +307,12 @@ async function buildContractTransactionXdr(
     .setTimeout(180)
     .build();
 
-  let simulation: Api.SimulateTransactionResponse;
+  let simulation: rpc.Api.SimulateTransactionResponse;
 
   try {
     simulation = await getRpcServer().simulateTransaction(tx);
   } catch (cause) {
+    console.error("RPC Simulation Failure:", cause);
     throw new StellarClientError(
       "RPC_ERROR",
       "Failed to reach the Soroban RPC endpoint.",
@@ -283,28 +320,35 @@ async function buildContractTransactionXdr(
     );
   }
 
-  const parsed = Api.isSimulationRaw(simulation)
-    ? parseRawSimulation(simulation)
+  const parsed = rpc.Api.isSimulationRaw(simulation)
+    ? rpc.parseRawSimulation(simulation)
     : simulation;
 
-  if (Api.isSimulationError(parsed)) {
-    throw new StellarClientError(
+  if (rpc.Api.isSimulationError(parsed)) {
+    const simulationError = new StellarClientError(
       "SIMULATION_FAILED",
       parsed.error ?? "Transaction simulation failed.",
     );
+    console.error("RPC Simulation Failure:", simulationError);
+    throw simulationError;
   }
 
-  if (Api.isSimulationRestore(parsed)) {
-    throw new StellarClientError(
+  if (rpc.Api.isSimulationRestore(parsed)) {
+    const restoreError = new StellarClientError(
       "RESTORE_REQUIRED",
       "Contract state must be restored before this transaction can be submitted.",
     );
+    console.error("RPC Simulation Failure:", restoreError);
+    throw restoreError;
   }
 
   try {
-    const assembled = assembleTransaction(tx, parsed).build();
+    // Re-hydrate to ensure instanceof checks pass the dual-package boundary
+    const safeTx = new Transaction(tx.toXDR(), STELLAR_TESTNET_NETWORK_PASSPHRASE);
+    const assembled = rpc.assembleTransaction(safeTx, parsed).build();
     return assembled.toXDR();
   } catch (cause) {
+    console.error("RPC Simulation Failure:", cause);
     throw new StellarClientError(
       "TX_BUILD_FAILED",
       "Failed to assemble the transaction XDR.",
@@ -337,7 +381,7 @@ export async function getEscrowState(
 
   const simulation = await simulateContractCall(source, operation);
 
-  if (!Api.isSimulationSuccess(simulation)) {
+  if (!rpc.Api.isSimulationSuccess(simulation)) {
     throw new StellarClientError(
       "SIMULATION_FAILED",
       "Unexpected simulation response for get_escrow.",
@@ -349,54 +393,68 @@ export async function getEscrowState(
 
 /**
  * Builds XDR for `init_escrow` (funder must sign & submit).
+ * @param amount - Escrow amount in XLM (converted to stroops before packing).
  */
 export async function buildInitEscrowTx(
   funder: string,
   vendor: string,
-  amount: bigint,
+  amount: bigint | number,
   recipient: string,
 ): Promise<string> {
-  assertValidAddress("funder", funder);
-  assertValidAddress("vendor", vendor);
-  assertValidAddress("recipient", recipient);
-  assertConfiguredContractId(
-    NATIVE_XLM_TOKEN_CONTRACT_ID,
-    "NATIVE_XLM_TOKEN_CONTRACT_ID",
-  );
+  try {
+    assertValidAddress("funder", funder);
+    assertValidAddress("vendor", vendor);
+    assertValidAddress("recipient", recipient);
+    assertConfiguredContractId(
+      NATIVE_XLM_TOKEN_CONTRACT_ID,
+      "NATIVE_XLM_TOKEN_CONTRACT_ID",
+    );
 
-  const contract = getEscrowContract();
-  const operation = contract.call(
-    "init_escrow",
-    addressToScVal(funder),
-    addressToScVal(NATIVE_XLM_TOKEN_CONTRACT_ID),
-    addressToScVal(vendor),
-    addressToScVal(recipient),
-    i128ToScVal(amount),
-  );
+    const amountStroops = xlmToStroops(amount);
+    const contract = getEscrowContract();
+    const operation = contract.call(
+      "init_escrow",
+      addressToScVal(funder),
+      addressToScVal(NATIVE_XLM_TOKEN_CONTRACT_ID),
+      addressToScVal(vendor),
+      addressToScVal(recipient),
+      i128ToScVal(amountStroops),
+    );
 
-  return buildContractTransactionXdr(funder, operation);
+    return await buildContractTransactionXdr(funder, operation);
+  } catch (error) {
+    console.error("RPC Simulation Failure:", error);
+    throw error;
+  }
 }
 
 /**
  * Builds XDR for `fund_escrow` (funder deposits Native XLM).
+ * @param amount - Deposit amount in XLM (converted to stroops before packing).
  */
 export async function buildFundEscrowTx(
   funder: string,
   recipient: string,
-  amount: bigint,
+  amount: bigint | number,
 ): Promise<string> {
-  assertValidAddress("funder", funder);
-  assertValidAddress("recipient", recipient);
+  try {
+    assertValidAddress("funder", funder);
+    assertValidAddress("recipient", recipient);
 
-  const contract = getEscrowContract();
-  const operation = contract.call(
-    "fund_escrow",
-    addressToScVal(funder),
-    addressToScVal(recipient),
-    i128ToScVal(amount),
-  );
+    const amountStroops = xlmToStroops(amount);
+    const contract = getEscrowContract();
+    const operation = contract.call(
+      "fund_escrow",
+      addressToScVal(funder),
+      addressToScVal(recipient),
+      i128ToScVal(amountStroops),
+    );
 
-  return buildContractTransactionXdr(funder, operation);
+    return await buildContractTransactionXdr(funder, operation);
+  } catch (error) {
+    console.error("RPC Simulation Failure:", error);
+    throw error;
+  }
 }
 
 /**
@@ -408,19 +466,24 @@ export async function buildSubmitProofTx(
   proofHash: string,
   recipient?: string,
 ): Promise<string> {
-  assertValidAddress("beneficiary", beneficiary);
-  const escrowRecipient = recipient ?? beneficiary;
-  assertValidAddress("recipient", escrowRecipient);
+  try {
+    assertValidAddress("beneficiary", beneficiary);
+    const escrowRecipient = recipient ?? beneficiary;
+    assertValidAddress("recipient", escrowRecipient);
 
-  const contract = getEscrowContract();
-  const operation = contract.call(
-    "submit_proof",
-    addressToScVal(beneficiary),
-    addressToScVal(escrowRecipient),
-    proofHashToScVal(proofHash),
-  );
+    const contract = getEscrowContract();
+    const operation = contract.call(
+      "submit_proof",
+      addressToScVal(beneficiary),
+      addressToScVal(escrowRecipient),
+      proofHashToScVal(proofHash),
+    );
 
-  return buildContractTransactionXdr(beneficiary, operation);
+    return await buildContractTransactionXdr(beneficiary, operation);
+  } catch (error) {
+    console.error("RPC Simulation Failure:", error);
+    throw error;
+  }
 }
 
 /**
@@ -430,15 +493,20 @@ export async function buildReleaseFundsTx(
   funder: string,
   recipient: string,
 ): Promise<string> {
-  assertValidAddress("funder", funder);
-  assertValidAddress("recipient", recipient);
+  try {
+    assertValidAddress("funder", funder);
+    assertValidAddress("recipient", recipient);
 
-  const contract = getEscrowContract();
-  const operation = contract.call(
-    "release_funds",
-    addressToScVal(funder),
-    addressToScVal(recipient),
-  );
+    const contract = getEscrowContract();
+    const operation = contract.call(
+      "release_funds",
+      addressToScVal(funder),
+      addressToScVal(recipient),
+    );
 
-  return buildContractTransactionXdr(funder, operation);
+    return await buildContractTransactionXdr(funder, operation);
+  } catch (error) {
+    console.error("RPC Simulation Failure:", error);
+    throw error;
+  }
 }

@@ -55,7 +55,7 @@ export default function Home() {
                 vendors only after beneficiaries submit verified milestone proof.
               </p>
               <Link
-                href="#funder-dashboard"
+                href="/funder"
                 className="mt-6 inline-flex items-center text-sm font-semibold text-emerald-400 transition hover:text-emerald-300"
               >
                 Open Funder Dashboard →
@@ -91,7 +91,7 @@ export default function Home() {
                 authorization.
               </p>
               <Link
-                href="#beneficiary-signoff"
+                href="/beneficiary"
                 className="mt-6 inline-flex items-center text-sm font-semibold text-amber-400 transition hover:text-amber-300"
               >
                 Go to Beneficiary Sign-off →
