@@ -1,6 +1,6 @@
 # PROJECT NAME: SMART PROTOCOL ZAMBIA 
 
-# Accessible at : [SmartProtocol-Zm](https://smartprotocol-zm.vercel.app/)
+# Accessible at (Click this --->): [SmartProtocol-Zm](https://smartprotocol-zm.vercel.app/)
 
 **A Decentralized Escrow and Milestone Verification Protocol on the Stellar Testnet**
 
