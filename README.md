@@ -1,9 +1,10 @@
-# PROJECT NAME: SmartProtocol Zambia 
-# Accessible at : [https://smartprotocol-zm.vercel.app/]
+# PROJECT NAME: SMART PROTOCOL ZAMBIA 
+
+# Accessible at : [SmartProtocol-Zm](https://smartprotocol-zm.vercel.app/)
 
 **A Decentralized Escrow and Milestone Verification Protocol on the Stellar Testnet**
 
-SmartProtocol Zambia is a Web3 application designed to bring cryptographically secure, milestone-based funding to agricultural and service subsidies. Built as part of Master's degree research at the University of Zambia (UNZA), this platform utilizes Soroban Smart Contracts to ensure that locked funds are only released to vendors once beneficiaries provide verifiable cryptographic proof of receipt.
+SmartProtocol Zambia is a Web3 application designed to bring cryptographically secure, milestone-based funding to agricultural and service subsidies. Developed as an official MVP, this platform utilizes Soroban Smart Contracts to ensure that locked funds are only released to vendors once beneficiaries provide verifiable cryptographic proof of receipt.
 
 [![Live Demo](https://img.shields.io/badge/Live_Demo-Vercel-black?style=for-the-badge&logo=vercel)](https://smartprotocol-zm.vercel.app/)
 [![Network](https://img.shields.io/badge/Network-Stellar_Testnet-blue?style=for-the-badge)](https://stellar.org/)
@@ -73,11 +74,11 @@ Open http://localhost:3000 with your browser to see the application.
 ## Engineering Notes & Workarounds
 During development and deployment, several advanced Web3 and edge-runtime challenges were mitigated:
 
-Stellar SDK & Turbopack Dual-Package Hazard: Implemented a re-hydration patch in stellarClient.ts (new Transaction(tx.toXDR())) to bypass instanceof memory reference bugs when compiling transaction XDR under Next.js Turbopack.
+**Stellar SDK & Turbopack Dual-Package Hazard**: Implemented a re-hydration patch in stellarClient.ts (new Transaction(tx.toXDR())) to bypass instanceof memory reference bugs when compiling transaction XDR under Next.js Turbopack.
 
-Soroban Enum Parsing: Created a client-side unwrap utility to format Rust contract Enums (which deserialize as single-item arrays like ["Locked"] via the RPC) into strictly typed TypeScript strings.
+**Soroban Enum Parsing**: Created a client-side unwrap utility to format Rust contract Enums (which deserialize as single-item arrays like ["Locked"] via the RPC) into strictly typed TypeScript strings.
 
-Tailwind v4 / Vercel Linux Compilation: Migrated the frontend package manager entirely from npm to Yarn to bypass the npm #4828 optional dependency bug, ensuring the lightningcss Linux binary successfully compiles on Vercel's build servers.
+**Tailwind v4 / Vercel Linux Compilation**: Migrated the frontend package manager entirely from npm to Yarn to bypass the npm #4828 optional dependency bug, ensuring the lightningcss Linux binary successfully compiles on Vercel's build servers.
 
 ## Project Status & Acknowledgements
 
