@@ -1,5 +1,7 @@
+import Image from "next/image";
 import Link from "next/link";
 
+import logoImg from "./logo.png";
 import { Navbar } from "@/src/components/Navbar";
 
 export default function Home() {
@@ -12,6 +14,11 @@ export default function Home() {
 
         <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-12 sm:px-6 sm:py-16 lg:px-8 lg:py-20">
           <section className="mx-auto max-w-3xl text-center">
+            <Image
+              src={logoImg}
+              alt="SmartProtocol Zambia Logo"
+              className="w-20 h-20 rounded-full object-cover mx-auto mb-6 border border-emerald-900/50"
+            />
             <p className="mb-4 inline-flex rounded-full border border-emerald-500/30 bg-emerald-950/50 px-4 py-1 text-xs font-semibold uppercase tracking-widest text-emerald-400">
               Verified Milestone Payouts
             </p>

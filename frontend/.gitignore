@@ -39,3 +39,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Internal Development Reports
+memoryhistory.md
+updates_report.md
+updates_report_2.md
+updates_report_3.md
+updates_report_4.md
