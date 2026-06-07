@@ -82,6 +82,6 @@ During development and deployment, several advanced Web3 and edge-runtime challe
 
 ## Project Status & Acknowledgements
 
-Developed by Chilundika as an official MVP. 
+Developed by **Chilundika Chipo** as an official MVP. 
 
 This project was built to demonstrate the practical, high-impact application of Soroban smart contracts and decentralized Web3 infrastructure in solving real-world agricultural and service subsidy challenges in Zambia.
