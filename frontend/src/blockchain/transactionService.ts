@@ -1,5 +1,5 @@
 import { signTransaction } from "@stellar/freighter-api";
-import { rpc, Transaction } from "@stellar/stellar-sdk";
+import { Keypair, rpc, Transaction } from "@stellar/stellar-sdk";
 
 import {
   STELLAR_TESTNET_NETWORK_PASSPHRASE,
@@ -130,53 +130,10 @@ async function pollUntilLedgerSettled(
   );
 }
 
-/**
- * Signs an assembled transaction XDR with Freighter, submits it to Soroban RPC,
- * and polls until the transaction is SUCCESS or FAILED on the ledger.
- */
-export async function signAndSubmitTransaction(
-  xdr: string,
+async function submitSignedTransaction(
+  signedTransaction: Transaction,
+  signerAddress: string,
 ): Promise<TransactionSubmitResult> {
-  const trimmedXdr = xdr.trim();
-
-  if (!trimmedXdr) {
-    throw new TransactionServiceError(
-      "INVALID_XDR",
-      "Cannot sign an empty transaction XDR.",
-    );
-  }
-
-  console.info("[transactionService] Requesting Freighter signature…");
-
-  const signResult = await signTransaction(trimmedXdr, {
-    networkPassphrase: STELLAR_TESTNET_NETWORK_PASSPHRASE,
-  });
-
-  if (signResult.error) {
-    console.error("[transactionService] Freighter signing failed.", {
-      code: signResult.error.code,
-      message: signResult.error.message,
-    });
-    throw new TransactionServiceError(
-      "SIGNING_FAILED",
-      signResult.error.message ??
-        "Freighter rejected or failed to sign the transaction.",
-      signResult.error,
-    );
-  }
-
-  if (!signResult.signedTxXdr) {
-    throw new TransactionServiceError(
-      "SIGNING_FAILED",
-      "Freighter did not return a signed transaction XDR.",
-    );
-  }
-
-  const { signerAddress, signedTxXdr } = signResult;
-
-  console.info("[transactionService] Transaction signed.", { signerAddress });
-
-  const signedTransaction = parseSignedTransaction(signedTxXdr);
   const server = createRpcServer();
 
   let sendResponse: rpc.Api.SendTransactionResponse;
@@ -233,4 +190,92 @@ export async function signAndSubmitTransaction(
     status: ledgerStatus,
     signerAddress,
   };
+}
+
+/**
+ * Signs an assembled transaction XDR with Freighter, submits it to Soroban RPC,
+ * and polls until the transaction is SUCCESS or FAILED on the ledger.
+ */
+export async function signAndSubmitTransaction(
+  xdr: string,
+): Promise<TransactionSubmitResult> {
+  const trimmedXdr = xdr.trim();
+
+  if (!trimmedXdr) {
+    throw new TransactionServiceError(
+      "INVALID_XDR",
+      "Cannot sign an empty transaction XDR.",
+    );
+  }
+
+  console.info("[transactionService] Requesting Freighter signature…");
+
+  const signResult = await signTransaction(trimmedXdr, {
+    networkPassphrase: STELLAR_TESTNET_NETWORK_PASSPHRASE,
+  });
+
+  if (signResult.error) {
+    console.error("[transactionService] Freighter signing failed.", {
+      code: signResult.error.code,
+      message: signResult.error.message,
+    });
+    throw new TransactionServiceError(
+      "SIGNING_FAILED",
+      signResult.error.message ??
+        "Freighter rejected or failed to sign the transaction.",
+      signResult.error,
+    );
+  }
+
+  if (!signResult.signedTxXdr) {
+    throw new TransactionServiceError(
+      "SIGNING_FAILED",
+      "Freighter did not return a signed transaction XDR.",
+    );
+  }
+
+  const { signerAddress, signedTxXdr } = signResult;
+
+  console.info("[transactionService] Transaction signed.", { signerAddress });
+
+  const signedTransaction = parseSignedTransaction(signedTxXdr);
+  return submitSignedTransaction(signedTransaction, signerAddress);
+}
+
+/**
+ * Signs an assembled transaction XDR locally with a Keypair (embedded wallet),
+ * submits it to Soroban RPC, and polls until ledger settlement.
+ */
+export async function signAndSubmitWithKeypair(
+  xdr: string,
+  keypair: Keypair,
+): Promise<TransactionSubmitResult> {
+  const trimmedXdr = xdr.trim();
+
+  if (!trimmedXdr) {
+    throw new TransactionServiceError(
+      "INVALID_XDR",
+      "Cannot sign an empty transaction XDR.",
+    );
+  }
+
+  console.info("[transactionService] Signing with embedded wallet…", {
+    signerAddress: keypair.publicKey(),
+  });
+
+  let transaction: Transaction;
+
+  try {
+    transaction = new Transaction(trimmedXdr, STELLAR_TESTNET_NETWORK_PASSPHRASE);
+  } catch (cause) {
+    throw new TransactionServiceError(
+      "INVALID_XDR",
+      "The transaction XDR could not be parsed for signing.",
+      cause,
+    );
+  }
+
+  transaction.sign(keypair);
+
+  return submitSignedTransaction(transaction, keypair.publicKey());
 }

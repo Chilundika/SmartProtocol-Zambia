@@ -112,14 +112,13 @@ export default function Home() {
             </h3>
             <p className="mx-auto mt-2 max-w-2xl text-sm text-zinc-500 sm:text-base">
               Connect your Freighter wallet to interact with testnet escrows.
-              Week 2 brings the UI—contract flows come next.
             </p>
           </section>
         </main>
 
         <footer className="border-t border-zinc-800/80 py-6 text-center text-xs text-zinc-600">
           © {new Date().getFullYear()} SmartProtocol Zambia · Code-verified
-          agricultural payouts
+          agricultural payouts by Chilundika Chipo.
         </footer>
       </div>
     </div>

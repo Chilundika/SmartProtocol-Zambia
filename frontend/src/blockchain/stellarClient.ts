@@ -127,6 +127,27 @@ function addressToScVal(address: string): xdr.ScVal {
   return new Address(address).toScVal();
 }
 
+function u64ToScVal(value: number | bigint): xdr.ScVal {
+  const normalized = BigInt(value);
+  if (normalized < BigInt(0)) {
+    throw new StellarClientError(
+      "INVALID_ESCROW_ID",
+      "Escrow ID must be a non-negative integer.",
+    );
+  }
+  return nativeToScVal(normalized, { type: "u64" });
+}
+
+function assertValidEscrowId(escrowId: number | bigint): void {
+  const normalized = BigInt(escrowId);
+  if (normalized < BigInt(0)) {
+    throw new StellarClientError(
+      "INVALID_ESCROW_ID",
+      "Escrow ID must be a non-negative integer.",
+    );
+  }
+}
+
 function i128ToScVal(value: bigint): xdr.ScVal {
   if (value <= BigInt(0)) {
     throw new StellarClientError(
@@ -358,28 +379,28 @@ async function buildContractTransactionXdr(
 }
 
 /**
- * Read-only: calls `get_escrow(recipient)` on the escrow factory contract.
+ * Read-only: calls `get_escrow(escrow_id)` on the escrow factory contract.
  *
- * @param recipientAddress - Map key / beneficiary address for the escrow
- * @param simulationSourceAddress - Funded testnet account used only to simulate (defaults to `recipientAddress`)
+ * @param escrowId - Unique escrow identifier (u64)
+ * @param simulationSourceAddress - Funded testnet account used only to simulate
  */
 export async function getEscrowState(
-  recipientAddress: string,
-  simulationSourceAddress?: string,
+  escrowId: number | bigint,
+  simulationSourceAddress: string,
 ): Promise<EscrowStateResult> {
-  assertValidAddress("recipientAddress", recipientAddress);
-
-  const source =
-    simulationSourceAddress ?? recipientAddress;
-  assertValidAddress("simulationSourceAddress", source);
+  assertValidEscrowId(escrowId);
+  assertValidAddress("simulationSourceAddress", simulationSourceAddress);
 
   const contract = getEscrowContract();
   const operation = contract.call(
     "get_escrow",
-    addressToScVal(recipientAddress),
+    u64ToScVal(escrowId),
   );
 
-  const simulation = await simulateContractCall(source, operation);
+  const simulation = await simulateContractCall(
+    simulationSourceAddress,
+    operation,
+  );
 
   if (!rpc.Api.isSimulationSuccess(simulation)) {
     throw new StellarClientError(
@@ -396,12 +417,14 @@ export async function getEscrowState(
  * @param amount - Escrow amount in XLM (converted to stroops before packing).
  */
 export async function buildInitEscrowTx(
+  escrowId: number | bigint,
   funder: string,
   vendor: string,
   amount: bigint | number,
   recipient: string,
 ): Promise<string> {
   try {
+    assertValidEscrowId(escrowId);
     assertValidAddress("funder", funder);
     assertValidAddress("vendor", vendor);
     assertValidAddress("recipient", recipient);
@@ -414,6 +437,7 @@ export async function buildInitEscrowTx(
     const contract = getEscrowContract();
     const operation = contract.call(
       "init_escrow",
+      u64ToScVal(escrowId),
       addressToScVal(funder),
       addressToScVal(NATIVE_XLM_TOKEN_CONTRACT_ID),
       addressToScVal(vendor),
@@ -433,20 +457,20 @@ export async function buildInitEscrowTx(
  * @param amount - Deposit amount in XLM (converted to stroops before packing).
  */
 export async function buildFundEscrowTx(
+  escrowId: number | bigint,
   funder: string,
-  recipient: string,
   amount: bigint | number,
 ): Promise<string> {
   try {
+    assertValidEscrowId(escrowId);
     assertValidAddress("funder", funder);
-    assertValidAddress("recipient", recipient);
 
     const amountStroops = xlmToStroops(amount);
     const contract = getEscrowContract();
     const operation = contract.call(
       "fund_escrow",
+      u64ToScVal(escrowId),
       addressToScVal(funder),
-      addressToScVal(recipient),
       i128ToScVal(amountStroops),
     );
 
@@ -459,23 +483,21 @@ export async function buildFundEscrowTx(
 
 /**
  * Builds XDR for `submit_proof` (beneficiary sign-off).
- * `recipient` defaults to `beneficiary` (escrow map key).
  */
 export async function buildSubmitProofTx(
+  escrowId: number | bigint,
   beneficiary: string,
   proofHash: string,
-  recipient?: string,
 ): Promise<string> {
   try {
+    assertValidEscrowId(escrowId);
     assertValidAddress("beneficiary", beneficiary);
-    const escrowRecipient = recipient ?? beneficiary;
-    assertValidAddress("recipient", escrowRecipient);
 
     const contract = getEscrowContract();
     const operation = contract.call(
       "submit_proof",
+      u64ToScVal(escrowId),
       addressToScVal(beneficiary),
-      addressToScVal(escrowRecipient),
       proofHashToScVal(proofHash),
     );
 
@@ -490,18 +512,18 @@ export async function buildSubmitProofTx(
  * Builds XDR for `release_funds` (funder pays vendor after beneficiary proof).
  */
 export async function buildReleaseFundsTx(
+  escrowId: number | bigint,
   funder: string,
-  recipient: string,
 ): Promise<string> {
   try {
+    assertValidEscrowId(escrowId);
     assertValidAddress("funder", funder);
-    assertValidAddress("recipient", recipient);
 
     const contract = getEscrowContract();
     const operation = contract.call(
       "release_funds",
+      u64ToScVal(escrowId),
       addressToScVal(funder),
-      addressToScVal(recipient),
     );
 
     return await buildContractTransactionXdr(funder, operation);

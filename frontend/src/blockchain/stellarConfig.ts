@@ -16,7 +16,7 @@ export const STELLAR_TESTNET_NETWORK_PASSPHRASE =
  * Replace with the actual contract address after `stellar contract deploy`.
  */
 export const ESCROW_FACTORY_CONTRACT_ID =
-  "CABMN45ARQKZ6ISJUXHVDGB236U6IEIC2ZO2V24YZB6D7JQOUVL5VFCH" as const;
+  "CDZD44LXVV4RO7A224YMIFWGIMZ5ZFWCO6AJRYPHLZ5EBMYUAT4TP2BQ" as const;
 
 /**
  * Native XLM Stellar Asset Contract (SAC) on testnet.

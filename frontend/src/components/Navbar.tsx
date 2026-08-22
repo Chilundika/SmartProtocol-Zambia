@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useState } from "react";
 
+import { BeneficiaryWalletButton } from "@/src/components/BeneficiaryWalletButton";
 import { WalletConnectButton } from "@/src/components/WalletConnectButton";
 
 const navLinks = [
@@ -12,6 +14,8 @@ const navLinks = [
 
 export function Navbar() {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const pathname = usePathname();
+  const isBeneficiaryRoute = pathname.startsWith("/beneficiary");
 
   return (
     <header className="sticky top-0 z-50 border-b border-emerald-900/20 bg-zinc-950/80 backdrop-blur-md">
@@ -46,7 +50,11 @@ export function Navbar() {
         </ul>
 
         <div className="flex items-center gap-2 sm:gap-3">
-          <WalletConnectButton />
+          {isBeneficiaryRoute ? (
+            <BeneficiaryWalletButton />
+          ) : (
+            <WalletConnectButton />
+          )}
 
           <button
             type="button"

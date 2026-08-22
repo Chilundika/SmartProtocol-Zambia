@@ -2,7 +2,7 @@
 
 mod test;
 
-use soroban_sdk::{contract, contractimpl, contracttype, token, Address, BytesN, Env, Map};
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, BytesN, Env};
 
 // ---------------------------------------------------------------------------
 // Storage keys
@@ -11,7 +11,7 @@ use soroban_sdk::{contract, contractimpl, contracttype, token, Address, BytesN, 
 #[derive(Clone)]
 #[contracttype]
 enum DataKey {
-    Escrows,
+    Escrow(u64),
     NativeXlmToken,
 }
 
@@ -31,11 +31,10 @@ pub enum EscrowStatus {
     Released,
 }
 
-/// Factory record stored in `Map<Address, Escrow>` keyed by `recipient`
-/// (beneficiary / farmer).
+/// Escrow record stored at `DataKey::Escrow(escrow_id)`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[contracttype]
-pub struct Escrow {
+pub struct EscrowData {
     pub funder: Address,
     pub vendor: Address,
     pub amount: i128,
@@ -52,14 +51,15 @@ pub struct EscrowFactoryContract;
 
 #[contractimpl]
 impl EscrowFactoryContract {
-    /// Creates a new escrow entry in the factory map.
+    /// Creates a new escrow entry keyed by `escrow_id`.
     ///
     /// Security:
     /// - `funder.require_auth()` ensures only the declared funder can initialize.
-    /// - Rejects duplicate escrows for the same `recipient`.
+    /// - Rejects duplicate escrows for the same `escrow_id`.
     /// - Locks the Native XLM SAC address on first use to prevent token substitution.
     pub fn init_escrow(
         env: Env,
+        escrow_id: u64,
         funder: Address,
         native_xlm_token: Address,
         vendor: Address,
@@ -84,14 +84,14 @@ impl EscrowFactoryContract {
             storage.set(&DataKey::NativeXlmToken, &native_xlm_token);
         }
 
-        let mut escrows = Self::escrows_or_default(&env);
-        if escrows.contains_key(recipient.clone()) {
-            panic!("escrow already exists for recipient");
+        let escrow_key = DataKey::Escrow(escrow_id);
+        if storage.has(&escrow_key) {
+            panic!("escrow already exists for id");
         }
 
-        escrows.set(
-            recipient.clone(),
-            Escrow {
+        storage.set(
+            &escrow_key,
+            &EscrowData {
                 funder: funder.clone(),
                 vendor,
                 amount,
@@ -99,7 +99,6 @@ impl EscrowFactoryContract {
                 recipient,
             },
         );
-        storage.set(&DataKey::Escrows, &escrows);
     }
 
     /// Deposits Native XLM into this contract for a specific escrow.
@@ -107,18 +106,13 @@ impl EscrowFactoryContract {
     /// Security:
     /// - Only the stored `funder` may call this function (`funder.require_auth()`).
     /// - Enforces `Locked -> Pending` (funds must not be deposited twice).
-    ///
-    /// `fund_escrow` logic:
-    /// 1) Authenticate the funder and load the escrow by `recipient`.
-    /// 2) Validate amount and state (`Locked`).
-    /// 3) Transfer Native XLM (SAC) from funder -> contract via `token::Client`.
-    /// 4) Move status to `Pending` so the beneficiary can submit proof.
-    pub fn fund_escrow(env: Env, funder: Address, recipient: Address, amount: i128) {
+    pub fn fund_escrow(env: Env, escrow_id: u64, funder: Address, amount: i128) {
         funder.require_auth();
 
-        let mut escrows = Self::escrows_or_default(&env);
-        let mut escrow = escrows
-            .get(recipient.clone())
+        let storage = env.storage().instance();
+        let escrow_key = DataKey::Escrow(escrow_id);
+        let mut escrow: EscrowData = storage
+            .get(&escrow_key)
             .unwrap_or_else(|| panic!("escrow not found"));
 
         if escrow.funder != funder {
@@ -136,33 +130,26 @@ impl EscrowFactoryContract {
         token_client.transfer(&funder, &env.current_contract_address(), &amount);
 
         escrow.status = EscrowStatus::Pending;
-        escrows.set(recipient, escrow);
-        env.storage().instance().set(&DataKey::Escrows, &escrows);
+        storage.set(&escrow_key, &escrow);
     }
 
-    /// Beneficiary (farmer) triggers milestone sign-off.
+    /// Beneficiary (farmer) triggers milestone sign-off for a specific escrow.
     ///
     /// Security:
-    /// - Only `beneficiary` matching `escrow.recipient` may call
-    ///   (`beneficiary.require_auth()`).
+    /// - Only the stored `recipient` may call (`beneficiary.require_auth()`).
     /// - Enforces `Pending -> Released` (proof only after funding).
-    ///
-    /// `submit_proof` logic:
-    /// 1) Authenticate the beneficiary and load the escrow.
-    /// 2) Require escrow to be `Pending` (funds already locked in contract).
-    /// 3) MVP: accept a non-zero `proof_hash` as cryptographic sign-off placeholder.
-    /// 4) Mark escrow `Released` so the funder can execute payout to vendor.
     pub fn submit_proof(
         env: Env,
+        escrow_id: u64,
         beneficiary: Address,
-        recipient: Address,
         proof_hash: BytesN<32>,
     ) {
         beneficiary.require_auth();
 
-        let mut escrows = Self::escrows_or_default(&env);
-        let mut escrow = escrows
-            .get(recipient.clone())
+        let storage = env.storage().instance();
+        let escrow_key = DataKey::Escrow(escrow_id);
+        let mut escrow: EscrowData = storage
+            .get(&escrow_key)
             .unwrap_or_else(|| panic!("escrow not found"));
 
         if escrow.recipient != beneficiary {
@@ -178,8 +165,7 @@ impl EscrowFactoryContract {
         }
 
         escrow.status = EscrowStatus::Released;
-        escrows.set(recipient, escrow);
-        env.storage().instance().set(&DataKey::Escrows, &escrows);
+        storage.set(&escrow_key, &escrow);
     }
 
     /// Sends locked Native XLM to the vendor after proof submission.
@@ -188,17 +174,13 @@ impl EscrowFactoryContract {
     /// - Only the escrow `funder` may release (`funder.require_auth()`).
     /// - Requires `Released` status (proof already submitted by beneficiary).
     /// - Clears `amount` after transfer to prevent double-spend on re-entry.
-    ///
-    /// `release_funds` logic:
-    /// 1) Authenticate funder and verify escrow is `Released`.
-    /// 2) Transfer Native XLM from contract -> `vendor`.
-    /// 3) Zero out `amount` as an idempotency guard.
-    pub fn release_funds(env: Env, funder: Address, recipient: Address) {
+    pub fn release_funds(env: Env, escrow_id: u64, funder: Address) {
         funder.require_auth();
 
-        let mut escrows = Self::escrows_or_default(&env);
-        let mut escrow = escrows
-            .get(recipient.clone())
+        let storage = env.storage().instance();
+        let escrow_key = DataKey::Escrow(escrow_id);
+        let mut escrow: EscrowData = storage
+            .get(&escrow_key)
             .unwrap_or_else(|| panic!("escrow not found"));
 
         if escrow.funder != funder {
@@ -221,12 +203,11 @@ impl EscrowFactoryContract {
         );
 
         escrow.amount = 0;
-        escrows.set(recipient, escrow);
-        env.storage().instance().set(&DataKey::Escrows, &escrows);
+        storage.set(&escrow_key, &escrow);
     }
 
-    pub fn get_escrow(env: Env, recipient: Address) -> Option<Escrow> {
-        Self::escrows_or_default(&env).get(recipient)
+    pub fn get_escrow(env: Env, escrow_id: u64) -> Option<EscrowData> {
+        env.storage().instance().get(&DataKey::Escrow(escrow_id))
     }
 
     fn native_xlm_token(env: &Env) -> Address {
@@ -234,12 +215,5 @@ impl EscrowFactoryContract {
             .instance()
             .get(&DataKey::NativeXlmToken)
             .unwrap_or_else(|| panic!("native_xlm_token not initialized"))
-    }
-
-    fn escrows_or_default(env: &Env) -> Map<Address, Escrow> {
-        env.storage()
-            .instance()
-            .get(&DataKey::Escrows)
-            .unwrap_or_else(|| Map::new(env))
     }
 }

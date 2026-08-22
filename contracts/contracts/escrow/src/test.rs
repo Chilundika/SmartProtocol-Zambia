@@ -3,6 +3,9 @@
 use super::*;
 use soroban_sdk::{testutils::Address as _, token, Address, BytesN, Env};
 
+const ESCROW_ID: u64 = 1;
+const ESCROW_ID_2: u64 = 2;
+
 /// Shared test harness: registers contract, Native XLM SAC, and mints to funder.
 struct EscrowHarness {
     env: Env,
@@ -12,6 +15,7 @@ struct EscrowHarness {
     beneficiary: Address,
     native_xlm: Address,
     amount: i128,
+    escrow_id: u64,
 }
 
 impl EscrowHarness {
@@ -42,11 +46,13 @@ impl EscrowHarness {
             beneficiary,
             native_xlm,
             amount,
+            escrow_id: ESCROW_ID,
         }
     }
 
     fn init_locked(&self) {
         self.client.init_escrow(
+            &self.escrow_id,
             &self.funder,
             &self.native_xlm,
             &self.vendor,
@@ -57,13 +63,13 @@ impl EscrowHarness {
 
     fn fund(&self) {
         self.client
-            .fund_escrow(&self.funder, &self.beneficiary, &self.amount);
+            .fund_escrow(&self.escrow_id, &self.funder, &self.amount);
     }
 
     fn submit_valid_proof(&self) {
         let proof_hash = BytesN::from_array(&self.env, &[1u8; 32]);
         self.client
-            .submit_proof(&self.beneficiary, &self.beneficiary, &proof_hash);
+            .submit_proof(&self.escrow_id, &self.beneficiary, &proof_hash);
     }
 
     fn to_pending(&self) {
@@ -86,27 +92,50 @@ fn happy_path_fund_sign_release() {
     let h = EscrowHarness::new();
 
     h.init_locked();
-    let locked = h.client.get_escrow(&h.beneficiary).unwrap();
+    let locked = h.client.get_escrow(&h.escrow_id).unwrap();
     assert_eq!(locked.status, EscrowStatus::Locked);
     assert_eq!(locked.amount, h.amount);
 
     h.fund();
-    let pending = h.client.get_escrow(&h.beneficiary).unwrap();
+    let pending = h.client.get_escrow(&h.escrow_id).unwrap();
     assert_eq!(pending.status, EscrowStatus::Pending);
 
     h.submit_valid_proof();
-    let released = h.client.get_escrow(&h.beneficiary).unwrap();
+    let released = h.client.get_escrow(&h.escrow_id).unwrap();
     assert_eq!(released.status, EscrowStatus::Released);
     assert_eq!(released.amount, h.amount);
 
-    h.client.release_funds(&h.funder, &h.beneficiary);
+    h.client.release_funds(&h.escrow_id, &h.funder);
 
-    let final_state = h.client.get_escrow(&h.beneficiary).unwrap();
+    let final_state = h.client.get_escrow(&h.escrow_id).unwrap();
     assert_eq!(final_state.status, EscrowStatus::Released);
     assert_eq!(final_state.amount, 0);
 
     let token_client = token::Client::new(&h.env, &h.native_xlm);
     assert_eq!(token_client.balance(&h.vendor), h.amount);
+}
+
+#[test]
+fn same_beneficiary_can_have_multiple_escrows() {
+    let h = EscrowHarness::new();
+
+    h.init_locked();
+    h.client.init_escrow(
+        &ESCROW_ID_2,
+        &h.funder,
+        &h.native_xlm,
+        &h.vendor,
+        &h.beneficiary,
+        &h.amount,
+    );
+
+    let first = h.client.get_escrow(&ESCROW_ID).unwrap();
+    let second = h.client.get_escrow(&ESCROW_ID_2).unwrap();
+
+    assert_eq!(first.recipient, h.beneficiary);
+    assert_eq!(second.recipient, h.beneficiary);
+    assert_eq!(first.status, EscrowStatus::Locked);
+    assert_eq!(second.status, EscrowStatus::Locked);
 }
 
 // ---------------------------------------------------------------------------
@@ -118,6 +147,7 @@ fn happy_path_fund_sign_release() {
 fn init_escrow_rejects_zero_amount() {
     let h = EscrowHarness::new();
     h.client.init_escrow(
+        &h.escrow_id,
         &h.funder,
         &h.native_xlm,
         &h.vendor,
@@ -127,11 +157,12 @@ fn init_escrow_rejects_zero_amount() {
 }
 
 #[test]
-#[should_panic(expected = "escrow already exists for recipient")]
-fn init_escrow_rejects_duplicate_recipient() {
+#[should_panic(expected = "escrow already exists for id")]
+fn init_escrow_rejects_duplicate_id() {
     let h = EscrowHarness::new();
     h.init_locked();
     h.client.init_escrow(
+        &h.escrow_id,
         &h.funder,
         &h.native_xlm,
         &h.vendor,
@@ -146,10 +177,9 @@ fn init_escrow_rejects_duplicate_recipient() {
 
 #[test]
 #[should_panic(expected = "escrow not found")]
-fn fund_escrow_rejects_unknown_recipient() {
+fn fund_escrow_rejects_unknown_id() {
     let h = EscrowHarness::new();
-    let stranger = Address::generate(&h.env);
-    h.client.fund_escrow(&h.funder, &stranger, &h.amount);
+    h.client.fund_escrow(&999, &h.funder, &h.amount);
 }
 
 #[test]
@@ -158,8 +188,7 @@ fn fund_escrow_rejects_wrong_funder() {
     let h = EscrowHarness::new();
     h.init_locked();
     let impostor = Address::generate(&h.env);
-    h.client
-        .fund_escrow(&impostor, &h.beneficiary, &h.amount);
+    h.client.fund_escrow(&h.escrow_id, &impostor, &h.amount);
 }
 
 #[test]
@@ -168,7 +197,7 @@ fn fund_escrow_rejects_wrong_amount() {
     let h = EscrowHarness::new();
     h.init_locked();
     h.client
-        .fund_escrow(&h.funder, &h.beneficiary, &(h.amount - 1));
+        .fund_escrow(&h.escrow_id, &h.funder, &(h.amount - 1));
 }
 
 #[test]
@@ -176,8 +205,7 @@ fn fund_escrow_rejects_wrong_amount() {
 fn fund_escrow_rejects_double_funding() {
     let h = EscrowHarness::new();
     h.to_pending();
-    h.client
-        .fund_escrow(&h.funder, &h.beneficiary, &h.amount);
+    h.client.fund_escrow(&h.escrow_id, &h.funder, &h.amount);
 }
 
 // ---------------------------------------------------------------------------
@@ -191,8 +219,7 @@ fn submit_proof_rejects_wrong_beneficiary() {
     h.to_pending();
     let impostor = Address::generate(&h.env);
     let proof_hash = BytesN::from_array(&h.env, &[2u8; 32]);
-    h.client
-        .submit_proof(&impostor, &h.beneficiary, &proof_hash);
+    h.client.submit_proof(&h.escrow_id, &impostor, &proof_hash);
 }
 
 #[test]
@@ -201,8 +228,7 @@ fn submit_proof_rejects_zero_hash() {
     let h = EscrowHarness::new();
     h.to_pending();
     let zero = BytesN::from_array(&h.env, &[0u8; 32]);
-    h.client
-        .submit_proof(&h.beneficiary, &h.beneficiary, &zero);
+    h.client.submit_proof(&h.escrow_id, &h.beneficiary, &zero);
 }
 
 #[test]
@@ -211,8 +237,7 @@ fn submit_proof_rejects_before_funding() {
     let h = EscrowHarness::new();
     h.init_locked();
     let proof_hash = BytesN::from_array(&h.env, &[3u8; 32]);
-    h.client
-        .submit_proof(&h.beneficiary, &h.beneficiary, &proof_hash);
+    h.client.submit_proof(&h.escrow_id, &h.beneficiary, &proof_hash);
 }
 
 // ---------------------------------------------------------------------------
@@ -225,7 +250,7 @@ fn release_funds_rejects_unauthorized_address() {
     let h = EscrowHarness::new();
     h.to_released();
     let attacker = Address::generate(&h.env);
-    h.client.release_funds(&attacker, &h.beneficiary);
+    h.client.release_funds(&h.escrow_id, &attacker);
 }
 
 #[test]
@@ -233,7 +258,7 @@ fn release_funds_rejects_unauthorized_address() {
 fn release_funds_rejects_before_proof() {
     let h = EscrowHarness::new();
     h.to_pending();
-    h.client.release_funds(&h.funder, &h.beneficiary);
+    h.client.release_funds(&h.escrow_id, &h.funder);
 }
 
 #[test]
@@ -241,7 +266,7 @@ fn release_funds_rejects_before_proof() {
 fn release_funds_rejects_when_only_locked() {
     let h = EscrowHarness::new();
     h.init_locked();
-    h.client.release_funds(&h.funder, &h.beneficiary);
+    h.client.release_funds(&h.escrow_id, &h.funder);
 }
 
 #[test]
@@ -249,15 +274,13 @@ fn release_funds_rejects_when_only_locked() {
 fn release_funds_rejects_empty_escrow() {
     let h = EscrowHarness::new();
     h.to_released();
-    h.client.release_funds(&h.funder, &h.beneficiary);
-    // Second release: amount is 0 after first payout.
-    h.client.release_funds(&h.funder, &h.beneficiary);
+    h.client.release_funds(&h.escrow_id, &h.funder);
+    h.client.release_funds(&h.escrow_id, &h.funder);
 }
 
 #[test]
 #[should_panic(expected = "escrow not found")]
-fn release_funds_rejects_unknown_recipient() {
+fn release_funds_rejects_unknown_id() {
     let h = EscrowHarness::new();
-    let stranger = Address::generate(&h.env);
-    h.client.release_funds(&h.funder, &stranger);
+    h.client.release_funds(&999, &h.funder);
 }

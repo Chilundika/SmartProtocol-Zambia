@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import { EmbeddedWalletProvider } from "@/src/context/EmbeddedWalletContext";
 import { WalletProvider } from "@/src/context/WalletContext";
 import "./globals.css";
 
@@ -17,7 +18,9 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="antialiased">
-        <WalletProvider>{children}</WalletProvider>
+        <WalletProvider>
+          <EmbeddedWalletProvider>{children}</EmbeddedWalletProvider>
+        </WalletProvider>
       </body>
     </html>
   );

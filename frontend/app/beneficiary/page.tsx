@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useState, type FormEvent } from "react";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 
 import {
   buildSubmitProofTx,
@@ -10,12 +11,13 @@ import {
   type EscrowStatusOnChain,
 } from "@/src/blockchain/stellarClient";
 import {
-  signAndSubmitTransaction,
+  signAndSubmitWithKeypair,
   TransactionServiceError,
   type TransactionSubmitResult,
 } from "@/src/blockchain/transactionService";
 import { Navbar } from "@/src/components/Navbar";
-import { useWallet } from "@/src/context/WalletContext";
+import { useEmbeddedWallet } from "@/src/context/EmbeddedWalletContext";
+import { loginAccount, WalletAuthError } from "@/src/lib/walletAuth";
 
 const STROOPS_PER_XLM = BigInt(10_000_000);
 const STELLAR_EXPERT_TESTNET_TX =
@@ -25,7 +27,7 @@ type ActionKey = "lookup" | "proof";
 
 type FeedbackState =
   | { kind: "idle" }
-  | { kind: "success"; action: ActionKey; result: TransactionSubmitResult }
+  | { kind: "success"; action: "proof"; result: TransactionSubmitResult }
   | {
       kind: "error";
       action: ActionKey;
@@ -69,9 +71,11 @@ function Spinner({ label }: { label: string }) {
 function TransactionOverlay({
   visible,
   label,
+  hint = "Do not close this tab.",
 }: {
   visible: boolean;
   label: string;
+  hint?: string;
 }) {
   if (!visible) {
     return null;
@@ -90,9 +94,102 @@ function TransactionOverlay({
           id="tx-overlay-label"
           className="mt-4 text-xs leading-relaxed text-zinc-400"
         >
-          Confirm the transaction in Freighter. Do not close this tab.
+          {hint}
         </p>
       </div>
+    </div>
+  );
+}
+
+function PinModal({
+  visible,
+  title,
+  submitLabel,
+  busy,
+  error,
+  onSubmit,
+  onCancel,
+}: {
+  visible: boolean;
+  title: string;
+  submitLabel: string;
+  busy: boolean;
+  error: string | null;
+  onSubmit: (pin: string) => void;
+  onCancel: () => void;
+}) {
+  const [pin, setPin] = useState("");
+
+  if (!visible) {
+    return null;
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[110] flex items-center justify-center bg-zinc-950/90 px-4 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="pin-modal-title"
+    >
+      <form
+        className="w-full max-w-sm rounded-2xl border border-amber-700/50 bg-zinc-900 p-6 shadow-2xl"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (pin.length === 4) {
+            onSubmit(pin);
+          }
+        }}
+      >
+        <h2
+          id="pin-modal-title"
+          className="text-lg font-semibold text-white"
+        >
+          {title}
+        </h2>
+        <p className="mt-2 text-sm text-zinc-400">
+          Enter your 4-digit PIN to sign this transaction locally on your
+          device.
+        </p>
+
+        <input
+          type="password"
+          inputMode="numeric"
+          pattern="\d{4}"
+          maxLength={4}
+          value={pin}
+          onChange={(event) =>
+            setPin(event.target.value.replace(/\D/g, "").slice(0, 4))
+          }
+          autoFocus
+          placeholder="••••"
+          aria-label="4-digit PIN"
+          className="mt-5 w-full rounded-xl border-2 border-zinc-700 bg-zinc-950 px-4 py-3 text-center font-mono text-2xl tracking-[0.5em] text-white focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+        />
+
+        {error ? (
+          <p className="mt-3 text-sm text-red-300" role="alert">
+            {error}
+          </p>
+        ) : null}
+
+        <div className="mt-6 flex gap-3">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            className="flex-1 rounded-xl border border-zinc-700 px-4 py-3 text-sm font-semibold text-zinc-300 transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={pin.length !== 4 || busy}
+            className="flex-1 rounded-xl bg-amber-500 px-4 py-3 text-sm font-bold text-zinc-950 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {busy ? "Signing…" : submitLabel}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }
@@ -120,12 +217,12 @@ function FeedbackBanner({ feedback }: { feedback: FeedbackState }) {
           funder may now release payout to the vendor.
         </p>
         <a
-          href={explorerUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="mt-4 inline-flex min-h-11 items-center rounded-lg bg-emerald-700 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:ring-offset-2 focus:ring-offset-zinc-950"
-        >
-          View on Stellar Expert
+            href={explorerUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-4 inline-flex min-h-11 items-center rounded-lg bg-emerald-700 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:ring-offset-2 focus:ring-offset-zinc-950"
+          >
+            View on Stellar Expert
         </a>
       </div>
     );
@@ -138,9 +235,7 @@ function FeedbackBanner({ feedback }: { feedback: FeedbackState }) {
       aria-live="assertive"
     >
       <p className="text-base font-semibold text-red-200">Action failed</p>
-      <p className="mt-2 font-mono text-xs text-red-300">
-        {feedback.code}
-      </p>
+      <p className="mt-2 font-mono text-xs text-red-300">{feedback.code}</p>
       <p className="mt-2 text-sm leading-relaxed text-zinc-200">
         {feedback.message}
       </p>
@@ -189,7 +284,6 @@ function validateProofHash(proofHash: string): void {
   }
 }
 
-/** Client-side 32-byte hex for live demos (guaranteed non-zero for contract MVP). */
 function generateDemoProofHash(): string {
   const bytes = new Uint8Array(32);
 
@@ -225,6 +319,15 @@ function resolveActionError(
     };
   }
 
+  if (error instanceof WalletAuthError) {
+    return {
+      kind: "error",
+      action,
+      code: error.code,
+      message: error.message,
+    };
+  }
+
   if (error instanceof Error) {
     return {
       kind: "error",
@@ -242,6 +345,22 @@ function resolveActionError(
   };
 }
 
+function parseEscrowIdInput(raw: string): number {
+  const trimmed = raw.trim();
+
+  if (!/^\d+$/.test(trimmed)) {
+    throw new Error("Escrow ID must be a positive whole number.");
+  }
+
+  const escrowId = Number(trimmed);
+
+  if (!Number.isSafeInteger(escrowId) || escrowId <= 0) {
+    throw new Error("Escrow ID must be a safe positive integer.");
+  }
+
+  return escrowId;
+}
+
 function readinessMessage(
   exists: boolean | null,
   escrow: EscrowState | null,
@@ -256,7 +375,7 @@ function readinessMessage(
   if (!exists) {
     return {
       tone: "warn",
-      text: "No active escrow is registered for your wallet on testnet.",
+      text: "No escrow found for this ID on testnet. Confirm the ID with your funder.",
     };
   }
 
@@ -284,36 +403,87 @@ function readinessMessage(
 }
 
 export default function BeneficiarySignoffPage() {
-  const { isConnected, publicKey, isConnecting } = useWallet();
+  const router = useRouter();
+  const {
+    isAuthenticated,
+    activeNrc,
+    publicKey,
+    isUnlocked,
+    keypair,
+    isBusy: walletBusy,
+    signOut,
+    deleteAccount,
+    unlockWithPin,
+  } = useEmbeddedWallet();
 
+  const [escrowId, setEscrowId] = useState("");
   const [escrowState, setEscrowState] = useState<EscrowState | null>(null);
   const [escrowExists, setEscrowExists] = useState<boolean | null>(null);
   const [proofHash, setProofHash] = useState("");
   const [loadingAction, setLoadingAction] = useState<ActionKey | null>(null);
   const [feedback, setFeedback] = useState<FeedbackState>({ kind: "idle" });
+  const [showPinModal, setShowPinModal] = useState(false);
+  const [pinModalError, setPinModalError] = useState<string | null>(null);
+  const [pendingProofHash, setPendingProofHash] = useState<string | null>(null);
+  const [copiedKey, setCopiedKey] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
-  const walletReady = isConnected && publicKey !== null;
-  const busy = isConnecting || loadingAction !== null;
+  useEffect(() => {
+    if (!isAuthenticated) {
+      router.replace("/beneficiary/auth");
+    }
+  }, [isAuthenticated, router]);
+
+  const walletReady = isAuthenticated && publicKey !== null;
+  const busy = walletBusy || loadingAction !== null;
   const signoffDisabled = !walletReady || busy;
 
   const readiness = readinessMessage(escrowExists, escrowState);
   const canSubmitProof =
-    walletReady && escrowExists === true && escrowState?.status === "Pending";
+    walletReady &&
+    escrowId.trim() !== "" &&
+    escrowExists === true &&
+    escrowState?.status === "Pending";
 
-  const refreshEscrowState = useCallback(async (beneficiary: string) => {
-    const result = await getEscrowState(beneficiary, beneficiary);
-    setEscrowExists(result.exists);
-    setEscrowState(result.escrow ?? null);
-    return result;
-  }, []);
+  const refreshEscrowState = useCallback(
+    async (escrowIdInput: string, beneficiary: string) => {
+      const parsedEscrowId = parseEscrowIdInput(escrowIdInput);
+      const result = await getEscrowState(parsedEscrowId, beneficiary);
+      setEscrowExists(result.exists);
+      setEscrowState(result.escrow ?? null);
+      return result;
+    },
+    [],
+  );
+
+  const handleCopyPublicKey = async () => {
+    if (!publicKey) return;
+    try {
+      await navigator.clipboard.writeText(publicKey);
+      setCopiedKey(true);
+      setTimeout(() => setCopiedKey(false), 2000);
+    } catch {
+      setCopiedKey(false);
+    }
+  };
 
   const handleLookup = async () => {
     if (!publicKey) {
       setFeedback({
         kind: "error",
         action: "lookup",
-        code: "WALLET_NOT_CONNECTED",
-        message: "Connect your Freighter wallet to verify delivery status.",
+        code: "WALLET_NOT_FOUND",
+        message: "Log in to verify delivery status.",
+      });
+      return;
+    }
+
+    if (!escrowId.trim()) {
+      setFeedback({
+        kind: "error",
+        action: "lookup",
+        code: "MISSING_ESCROW_ID",
+        message: "Enter the Escrow ID provided by your funder.",
       });
       return;
     }
@@ -322,7 +492,20 @@ export default function BeneficiarySignoffPage() {
     setFeedback({ kind: "idle" });
 
     try {
-      await refreshEscrowState(publicKey);
+      const result = await refreshEscrowState(escrowId, publicKey);
+      if (
+        result.exists &&
+        result.escrow &&
+        result.escrow.recipient !== publicKey
+      ) {
+        setFeedback({
+          kind: "error",
+          action: "lookup",
+          code: "NOT_AUTHORIZED",
+          message:
+            "This escrow belongs to a different beneficiary address. Check the Escrow ID.",
+        });
+      }
     } catch (error) {
       setEscrowExists(null);
       setEscrowState(null);
@@ -332,37 +515,122 @@ export default function BeneficiarySignoffPage() {
     }
   };
 
-  const handleSubmitProof = async (event: FormEvent<HTMLFormElement>) => {
+  const submitProofWithKeypair = async (
+    normalizedHash: string,
+    signingKeypair: NonNullable<typeof keypair>,
+  ) => {
+    if (!publicKey) return;
+
+    const parsedEscrowId = parseEscrowIdInput(escrowId);
+
+    setLoadingAction("proof");
+    setFeedback({ kind: "idle" });
+
+    try {
+      const xdr = await buildSubmitProofTx(
+        parsedEscrowId,
+        publicKey,
+        normalizedHash,
+      );
+      const result = await signAndSubmitWithKeypair(xdr, signingKeypair);
+
+      setFeedback({ kind: "success", action: "proof", result });
+      await refreshEscrowState(escrowId, publicKey);
+    } catch (error) {
+      setFeedback(resolveActionError("proof", error));
+    } finally {
+      setLoadingAction(null);
+      setShowPinModal(false);
+      setPendingProofHash(null);
+      setPinModalError(null);
+    }
+  };
+
+  const handleSubmitProof = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
     if (!publicKey) {
       setFeedback({
         kind: "error",
         action: "proof",
-        code: "WALLET_NOT_CONNECTED",
-        message: "Connect your Freighter wallet before submitting proof.",
+        code: "WALLET_NOT_FOUND",
+        message: "Log in before submitting proof.",
       });
       return;
     }
 
-    setLoadingAction("proof");
-    setFeedback({ kind: "idle" });
+    if (!escrowId.trim()) {
+      setFeedback({
+        kind: "error",
+        action: "proof",
+        code: "MISSING_ESCROW_ID",
+        message: "Enter the Escrow ID provided by your funder.",
+      });
+      return;
+    }
 
     try {
       const normalizedHash = normalizeProofHash(proofHash);
       validateProofHash(normalizedHash);
 
-      const xdr = await buildSubmitProofTx(publicKey, normalizedHash);
-      const result = await signAndSubmitTransaction(xdr);
+      if (isUnlocked && keypair) {
+        void submitProofWithKeypair(normalizedHash, keypair);
+        return;
+      }
 
-      setFeedback({ kind: "success", action: "proof", result });
-      await refreshEscrowState(publicKey);
+      setPendingProofHash(normalizedHash);
+      setPinModalError(null);
+      setShowPinModal(true);
     } catch (error) {
       setFeedback(resolveActionError("proof", error));
-    } finally {
-      setLoadingAction(null);
     }
   };
+
+  const handlePinModalSubmit = async (pin: string) => {
+    setPinModalError(null);
+
+    try {
+      let signingKeypair = keypair;
+
+      if (!signingKeypair) {
+        if (!activeNrc) {
+          throw new Error("No active session. Please log in again.");
+        }
+        const session = await loginAccount(activeNrc, pin);
+        signingKeypair = session.keypair;
+        await unlockWithPin(pin);
+      }
+
+      if (!pendingProofHash) {
+        throw new Error("No proof hash pending for submission.");
+      }
+
+      await submitProofWithKeypair(pendingProofHash, signingKeypair);
+    } catch (error) {
+      if (error instanceof WalletAuthError) {
+        setPinModalError(error.message);
+      } else if (error instanceof Error) {
+        setPinModalError(error.message);
+      } else {
+        setPinModalError("Unable to sign transaction.");
+      }
+    }
+  };
+
+  const handleSignOut = () => {
+    signOut();
+    router.push("/beneficiary/auth");
+  };
+
+  const handleDeleteAccount = () => {
+    deleteAccount();
+    setShowDeleteConfirm(false);
+    router.push("/beneficiary/auth");
+  };
+
+  if (!isAuthenticated) {
+    return null;
+  }
 
   const readinessToneClass = {
     neutral: "border-zinc-700 bg-zinc-900/80 text-zinc-300",
@@ -378,6 +646,21 @@ export default function BeneficiarySignoffPage() {
       <TransactionOverlay
         visible={loadingAction === "proof"}
         label="Submitting milestone proof…"
+        hint="Submitting your signed transaction to Stellar testnet. Do not close this tab."
+      />
+
+      <PinModal
+        visible={showPinModal}
+        title="Enter PIN to sign"
+        submitLabel="Sign & Submit"
+        busy={loadingAction === "proof"}
+        error={pinModalError}
+        onSubmit={(pin) => void handlePinModalSubmit(pin)}
+        onCancel={() => {
+          setShowPinModal(false);
+          setPendingProofHash(null);
+          setPinModalError(null);
+        }}
       />
 
       <div className="relative flex min-h-screen flex-col">
@@ -393,7 +676,7 @@ export default function BeneficiarySignoffPage() {
             </h1>
             <p className="mt-3 text-sm leading-relaxed text-zinc-400">
               Verify your escrow on Stellar testnet and submit cryptographic
-              proof that milestones were met.
+              proof that milestones were met — no browser extension required.
             </p>
           </header>
 
@@ -401,159 +684,271 @@ export default function BeneficiarySignoffPage() {
             <FeedbackBanner feedback={feedback} />
           </div>
 
-          <section
-            className="mb-6 rounded-2xl border border-amber-800/40 bg-zinc-900/70 p-5 shadow-lg sm:p-6"
-            aria-labelledby="verification-heading"
-          >
-            <h2
-              id="verification-heading"
-              className="text-lg font-semibold text-white"
-            >
-              Delivery verification
-            </h2>
-            <p className="mt-1 text-sm text-zinc-500">
-              Your connected wallet is the escrow beneficiary key on-chain.
-            </p>
-
-            <div className="mt-5 rounded-xl border border-zinc-800 bg-zinc-950 p-4">
-              <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                Connected wallet
-              </p>
-              {walletReady ? (
-                <p className="mt-2 break-all font-mono text-sm leading-relaxed text-amber-200">
+          <section className="mb-6 rounded-2xl border border-zinc-800 bg-zinc-900/70 p-5 shadow-lg sm:p-6">
+            <h2 className="text-lg font-semibold text-white">Your account</h2>
+            <dl className="mt-4 space-y-3">
+              <div>
+                <dt className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                  NRC number
+                </dt>
+                <dd className="mt-1 font-mono text-sm text-amber-200">
+                  {activeNrc}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                  Public key
+                </dt>
+                <dd className="mt-1 break-all font-mono text-sm text-zinc-300">
                   {publicKey}
-                </p>
-              ) : (
-                <p className="mt-2 text-sm text-amber-200/90">
-                  No wallet connected — use the button in the navbar.
-                </p>
-              )}
+                </dd>
+              </div>
+            </dl>
+            <div className="mt-4 flex flex-wrap gap-3">
+              <button
+                type="button"
+                onClick={() => void handleCopyPublicKey()}
+                className="rounded-lg bg-zinc-800 px-3 py-1.5 text-xs font-semibold text-zinc-200 transition hover:bg-zinc-700"
+              >
+                {copiedKey ? "Copied!" : "Copy public key"}
+              </button>
+              <span
+                className={`self-center text-xs font-medium ${isUnlocked ? "text-emerald-400" : "text-amber-400"}`}
+              >
+                {isUnlocked ? "Unlocked" : "Locked — unlock via navbar"}
+              </span>
             </div>
-
-            <button
-              type="button"
-              onClick={handleLookup}
-              disabled={signoffDisabled}
-              className="mt-5 flex min-h-12 w-full items-center justify-center rounded-xl bg-amber-500 px-4 py-3 text-base font-bold text-zinc-950 transition hover:bg-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-300 focus:ring-offset-2 focus:ring-offset-zinc-900 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {loadingAction === "lookup" ? (
-                <Spinner label="Checking escrow…" />
-              ) : (
-                "Check delivery status"
-              )}
-            </button>
-
-            <div
-              className={`mt-5 rounded-xl border-2 p-4 ${readinessToneClass}`}
-              role="status"
-            >
-              <p className="text-sm font-medium leading-relaxed">
-                {readiness.text}
-              </p>
+            <div className="mt-5 flex flex-wrap gap-3 border-t border-zinc-800 pt-5">
+              <button
+                type="button"
+                onClick={handleSignOut}
+                className="rounded-lg border border-zinc-700 px-4 py-2 text-sm font-semibold text-zinc-200 transition hover:bg-zinc-800"
+              >
+                Sign Out
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowDeleteConfirm(true)}
+                className="rounded-lg border border-red-800/60 bg-red-950/40 px-4 py-2 text-sm font-semibold text-red-200 transition hover:bg-red-950/70"
+              >
+                Delete Account
+              </button>
             </div>
-
-            {escrowExists && escrowState ? (
-              <dl className="mt-5 grid gap-4 border-t border-zinc-800 pt-5">
-                <div className="flex items-center justify-between gap-3">
-                  <dt className="text-xs font-semibold uppercase text-zinc-500">
-                    Status
-                  </dt>
-                  <dd>
-                    <span
-                      className={`inline-flex rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wide ${statusBadgeClass(escrowState.status)}`}
-                    >
-                      {escrowState.status}
-                    </span>
-                  </dd>
+            {showDeleteConfirm ? (
+              <div className="mt-4 rounded-xl border border-red-800/50 bg-red-950/30 p-4">
+                <p className="text-sm text-red-100">
+                  Delete this NRC account from this device? This cannot be undone.
+                </p>
+                <div className="mt-3 flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowDeleteConfirm(false)}
+                    className="rounded-lg border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDeleteAccount}
+                    className="rounded-lg bg-red-700 px-3 py-1.5 text-sm font-semibold text-white hover:bg-red-600"
+                  >
+                    Confirm Delete
+                  </button>
                 </div>
-                <div className="flex items-center justify-between gap-3">
-                  <dt className="text-xs font-semibold uppercase text-zinc-500">
-                    Escrow balance
-                  </dt>
-                  <dd className="text-lg font-bold text-white">
-                    {stroopsToXlmDisplay(escrowState.amount)}{" "}
-                    <span className="text-sm font-normal text-zinc-500">
-                      XLM
-                    </span>
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-xs font-semibold uppercase text-zinc-500">
-                    Vendor
-                  </dt>
-                  <dd className="mt-1 break-all font-mono text-xs text-zinc-400">
-                    {escrowState.vendor}
-                  </dd>
-                </div>
-              </dl>
+              </div>
             ) : null}
           </section>
 
-          <section
-            className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-5 shadow-lg sm:p-6"
-            aria-labelledby="signoff-heading"
-          >
-            <h2
-              id="signoff-heading"
-              className="text-lg font-semibold text-white"
-            >
-              Cryptographic sign-off
-            </h2>
-            <p className="mt-1 text-sm text-zinc-500">
-              Enter the 32-byte proof hash from your physical delivery
-              confirmation key.
-            </p>
+          <>
+              <section
+                className="mb-6 rounded-2xl border border-amber-800/40 bg-zinc-900/70 p-5 shadow-lg sm:p-6"
+                aria-labelledby="verification-heading"
+              >
+                <h2
+                  id="verification-heading"
+                  className="text-lg font-semibold text-white"
+                >
+                  Delivery verification
+                </h2>
+                <p className="mt-1 text-sm text-zinc-500">
+                  Enter the Escrow ID from your funder and verify delivery for
+                  that specific escrow.
+                </p>
 
-            <form onSubmit={handleSubmitProof} className="mt-5 space-y-5">
-              <div>
-                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <div className="mt-5">
                   <label
-                    htmlFor="proof-hash"
+                    htmlFor="escrow-id"
                     className="text-sm font-semibold text-zinc-200"
                   >
-                    Proof hash (hex)
+                    Escrow ID
                   </label>
-                  <button
-                    type="button"
-                    onClick={() => setProofHash(generateDemoProofHash())}
-                    disabled={loadingAction === "proof"}
-                    className="rounded bg-zinc-800 px-2 py-1 text-xs text-zinc-300 transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    Generate Demo Hash
-                  </button>
+                  <input
+                    id="escrow-id"
+                    type="text"
+                    inputMode="numeric"
+                    pattern="\d+"
+                    value={escrowId}
+                    onChange={(event) =>
+                      setEscrowId(event.target.value.replace(/\D/g, ""))
+                    }
+                    disabled={signoffDisabled}
+                    placeholder="e.g. 1734876543210"
+                    className="mt-2 w-full rounded-xl border-2 border-zinc-700 bg-zinc-950 px-4 py-3 font-mono text-sm text-white placeholder:text-zinc-600 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/30 disabled:cursor-not-allowed disabled:opacity-50"
+                  />
+                  <p className="mt-2 text-xs text-zinc-500">
+                    Your funder generates this ID when initializing the escrow.
+                  </p>
                 </div>
-                <textarea
-                  id="proof-hash"
-                  value={proofHash}
-                  onChange={(event) => setProofHash(event.target.value)}
+
+                <div className="mt-5 rounded-xl border border-zinc-800 bg-zinc-950 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                    Signing wallet
+                  </p>
+                  <p className="mt-2 break-all font-mono text-xs text-zinc-400">
+                    {publicKey}
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => void handleLookup()}
                   disabled={signoffDisabled}
-                  rows={4}
-                  placeholder="64 hexadecimal characters (optional 0x prefix)"
-                  className="w-full resize-y rounded-xl border-2 border-zinc-700 bg-zinc-950 px-4 py-3 font-mono text-sm text-white placeholder:text-zinc-600 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/30 disabled:cursor-not-allowed disabled:opacity-50"
-                  aria-describedby="proof-hash-hint"
-                />
-                <p id="proof-hash-hint" className="mt-2 text-xs text-zinc-500">
-                  MVP accepts any non-zero 32-byte hash. Advances escrow from
-                  Pending to Released.
-                </p>
-              </div>
+                  className="mt-5 flex min-h-12 w-full items-center justify-center rounded-xl bg-amber-500 px-4 py-3 text-base font-bold text-zinc-950 transition hover:bg-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-300 focus:ring-offset-2 focus:ring-offset-zinc-900 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {loadingAction === "lookup" ? (
+                    <Spinner label="Checking escrow…" />
+                  ) : (
+                    "Check delivery status"
+                  )}
+                </button>
 
-              {!canSubmitProof && walletReady && escrowExists !== null ? (
-                <p className="rounded-lg border border-zinc-700 bg-zinc-950/80 px-3 py-2 text-xs text-zinc-400">
-                  Sign-off is only available when escrow status is{" "}
-                  <span className="font-semibold text-amber-300">Pending</span>.
-                </p>
-              ) : null}
+                <div
+                  className={`mt-5 rounded-xl border-2 p-4 ${readinessToneClass}`}
+                  role="status"
+                >
+                  <p className="text-sm font-medium leading-relaxed">
+                    {readiness.text}
+                  </p>
+                </div>
 
-              <button
-                type="submit"
-                disabled={signoffDisabled || !canSubmitProof}
-                className="flex min-h-14 w-full items-center justify-center rounded-xl bg-emerald-600 px-4 py-4 text-base font-bold text-white shadow-lg shadow-emerald-950/40 transition hover:bg-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:ring-offset-2 focus:ring-offset-zinc-900 disabled:cursor-not-allowed disabled:opacity-40"
+                {escrowExists && escrowState ? (
+                  <dl className="mt-5 grid gap-4 border-t border-zinc-800 pt-5">
+                    <div className="flex items-center justify-between gap-3">
+                      <dt className="text-xs font-semibold uppercase text-zinc-500">
+                        Escrow ID
+                      </dt>
+                      <dd className="font-mono text-sm text-amber-200">
+                        {escrowId}
+                      </dd>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <dt className="text-xs font-semibold uppercase text-zinc-500">
+                        Status
+                      </dt>
+                      <dd>
+                        <span
+                          className={`inline-flex rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wide ${statusBadgeClass(escrowState.status)}`}
+                        >
+                          {escrowState.status}
+                        </span>
+                      </dd>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <dt className="text-xs font-semibold uppercase text-zinc-500">
+                        Escrow balance
+                      </dt>
+                      <dd className="text-lg font-bold text-white">
+                        {stroopsToXlmDisplay(escrowState.amount)}{" "}
+                        <span className="text-sm font-normal text-zinc-500">
+                          XLM
+                        </span>
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs font-semibold uppercase text-zinc-500">
+                        Vendor
+                      </dt>
+                      <dd className="mt-1 break-all font-mono text-xs text-zinc-400">
+                        {escrowState.vendor}
+                      </dd>
+                    </div>
+                  </dl>
+                ) : null}
+              </section>
+
+              <section
+                className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-5 shadow-lg sm:p-6"
+                aria-labelledby="signoff-heading"
               >
-                Confirm Receipt &amp; Unlock Funds
-              </button>
-            </form>
-          </section>
+                <h2
+                  id="signoff-heading"
+                  className="text-lg font-semibold text-white"
+                >
+                  Cryptographic sign-off
+                </h2>
+                <p className="mt-1 text-sm text-zinc-500">
+                  Enter the 32-byte proof hash from your physical delivery
+                  confirmation key. You will be prompted for your PIN to sign
+                  locally.
+                </p>
+
+                <form onSubmit={handleSubmitProof} className="mt-5 space-y-5">
+                  <div>
+                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                      <label
+                        htmlFor="proof-hash"
+                        className="text-sm font-semibold text-zinc-200"
+                      >
+                        Proof hash (hex)
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setProofHash(generateDemoProofHash())}
+                        disabled={loadingAction === "proof"}
+                        className="rounded bg-zinc-800 px-2 py-1 text-xs text-zinc-300 transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Generate Demo Hash
+                      </button>
+                    </div>
+                    <textarea
+                      id="proof-hash"
+                      value={proofHash}
+                      onChange={(event) => setProofHash(event.target.value)}
+                      disabled={signoffDisabled}
+                      rows={4}
+                      placeholder="64 hexadecimal characters (optional 0x prefix)"
+                      className="w-full resize-y rounded-xl border-2 border-zinc-700 bg-zinc-950 px-4 py-3 font-mono text-sm text-white placeholder:text-zinc-600 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/30 disabled:cursor-not-allowed disabled:opacity-50"
+                      aria-describedby="proof-hash-hint"
+                    />
+                    <p
+                      id="proof-hash-hint"
+                      className="mt-2 text-xs text-zinc-500"
+                    >
+                      MVP accepts any non-zero 32-byte hash. Advances escrow from
+                      Pending to Released.
+                    </p>
+                  </div>
+
+                  {!canSubmitProof && walletReady && escrowExists !== null ? (
+                    <p className="rounded-lg border border-zinc-700 bg-zinc-950/80 px-3 py-2 text-xs text-zinc-400">
+                      Sign-off is only available when escrow status is{" "}
+                      <span className="font-semibold text-amber-300">
+                        Pending
+                      </span>
+                      .
+                    </p>
+                  ) : null}
+
+                  <button
+                    type="submit"
+                    disabled={signoffDisabled || !canSubmitProof}
+                    className="flex min-h-14 w-full items-center justify-center rounded-xl bg-emerald-600 px-4 py-4 text-base font-bold text-white shadow-lg shadow-emerald-950/40 transition hover:bg-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:ring-offset-2 focus:ring-offset-zinc-900 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Confirm Receipt &amp; Unlock Funds
+                  </button>
+                </form>
+              </section>
+            </>
         </main>
 
         <footer className="border-t border-zinc-800 py-5 text-center text-xs text-zinc-600">

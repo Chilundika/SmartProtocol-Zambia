@@ -202,6 +202,26 @@ function parseXlmAmount(xlm: string): number {
   return amount;
 }
 
+function parseEscrowIdInput(raw: string): number {
+  const trimmed = raw.trim();
+
+  if (!/^\d+$/.test(trimmed)) {
+    throw new Error("Escrow ID must be a positive whole number.");
+  }
+
+  const escrowId = Number(trimmed);
+
+  if (!Number.isSafeInteger(escrowId) || escrowId <= 0) {
+    throw new Error("Escrow ID must be a safe positive integer.");
+  }
+
+  return escrowId;
+}
+
+function generateEscrowId(): number {
+  return Date.now();
+}
+
 function resolveActionError(
   action: ActionKey,
   error: unknown,
@@ -245,6 +265,7 @@ function resolveActionError(
 export default function FunderDashboardPage() {
   const { isConnected, publicKey, isConnecting } = useWallet();
 
+  const [escrowId, setEscrowId] = useState("");
   const [recipientAddress, setRecipientAddress] = useState("");
   const [vendorAddress, setVendorAddress] = useState("");
   const [initAmountXlm, setInitAmountXlm] = useState("");
@@ -260,15 +281,14 @@ export default function FunderDashboardPage() {
   const formsDisabled = !walletReady || isConnecting || loadingAction !== null;
 
   const refreshEscrowState = useCallback(
-    async (recipient: string) => {
-      const trimmedRecipient = recipient.trim();
+    async (escrowIdInput: string) => {
+      const parsedEscrowId = parseEscrowIdInput(escrowIdInput);
 
-      if (!trimmedRecipient) {
-        throw new Error("Enter a beneficiary address to read escrow status.");
+      if (!publicKey) {
+        throw new Error("Connect Freighter to read escrow status.");
       }
 
-      const simulationSource = publicKey ?? trimmedRecipient;
-      const result = await getEscrowState(trimmedRecipient, simulationSource);
+      const result = await getEscrowState(parsedEscrowId, publicKey);
 
       setEscrowExists(result.exists);
       setEscrowState(result.escrow ?? null);
@@ -280,7 +300,7 @@ export default function FunderDashboardPage() {
     async (
       action: ActionKey,
       buildXdr: () => Promise<string>,
-      recipientForRefresh?: string,
+      escrowIdForRefresh?: string,
     ) => {
       setLoadingAction(action);
       setFeedback({ kind: "idle" });
@@ -290,8 +310,8 @@ export default function FunderDashboardPage() {
         const result = await signAndSubmitTransaction(xdr);
         setFeedback({ kind: "success", action, result });
 
-        if (recipientForRefresh?.trim()) {
-          await refreshEscrowState(recipientForRefresh);
+        if (escrowIdForRefresh?.trim()) {
+          await refreshEscrowState(escrowIdForRefresh);
         }
       } catch (error) {
         setFeedback(resolveActionError(action, error));
@@ -307,7 +327,7 @@ export default function FunderDashboardPage() {
     setFeedback({ kind: "idle" });
 
     try {
-      await refreshEscrowState(recipientAddress);
+      await refreshEscrowState(escrowId);
     } catch (error) {
       setEscrowExists(null);
       setEscrowState(null);
@@ -332,14 +352,22 @@ export default function FunderDashboardPage() {
 
     const recipient = recipientAddress.trim();
     const vendor = vendorAddress.trim();
+    const newEscrowId = generateEscrowId();
+    setEscrowId(String(newEscrowId));
 
     await runTransaction(
       "init",
       async () => {
         const amount = parseXlmAmount(initAmountXlm);
-        return buildInitEscrowTx(publicKey, vendor, amount, recipient);
+        return buildInitEscrowTx(
+          newEscrowId,
+          publicKey,
+          vendor,
+          amount,
+          recipient,
+        );
       },
-      recipient,
+      String(newEscrowId),
     );
   };
 
@@ -356,15 +384,15 @@ export default function FunderDashboardPage() {
       return;
     }
 
-    const recipient = recipientAddress.trim();
+    const parsedEscrowId = parseEscrowIdInput(escrowId);
 
     await runTransaction(
       "fund",
       async () => {
         const amount = parseXlmAmount(fundAmountXlm);
-        return buildFundEscrowTx(publicKey, recipient, amount);
+        return buildFundEscrowTx(parsedEscrowId, publicKey, amount);
       },
-      recipient,
+      escrowId,
     );
   };
 
@@ -381,12 +409,12 @@ export default function FunderDashboardPage() {
       return;
     }
 
-    const recipient = recipientAddress.trim();
+    const parsedEscrowId = parseEscrowIdInput(escrowId);
 
     await runTransaction(
       "release",
-      async () => buildReleaseFundsTx(publicKey, recipient),
-      recipient,
+      async () => buildReleaseFundsTx(parsedEscrowId, publicKey),
+      escrowId,
     );
   };
 
@@ -433,7 +461,7 @@ export default function FunderDashboardPage() {
                     Escrow status reader
                   </h2>
                   <p className="mt-1 text-sm text-zinc-500">
-                    Live on-chain state for a beneficiary escrow record.
+                    Live on-chain state for a specific escrow ID.
                   </p>
                 </div>
                 {loadingAction === "status" ? (
@@ -444,13 +472,13 @@ export default function FunderDashboardPage() {
               <div className="mt-6 flex flex-col gap-4 sm:flex-row sm:items-end">
                 <div className="flex-1">
                   <FormField
-                    id="status-recipient"
-                    label="Beneficiary address (escrow key)"
-                    value={recipientAddress}
-                    onChange={setRecipientAddress}
-                    placeholder="G…"
+                    id="status-escrow-id"
+                    label="Escrow ID"
+                    value={escrowId}
+                    onChange={setEscrowId}
+                    placeholder="e.g. 1734876543210"
                     disabled={loadingAction !== null}
-                    hint="Used across all funder actions on this page."
+                    hint="Used across all funder actions on this page. Share this ID with the beneficiary."
                   />
                 </div>
                 <button
@@ -466,15 +494,23 @@ export default function FunderDashboardPage() {
               <div className="mt-6 rounded-xl border border-zinc-800 bg-zinc-950/60 p-5">
                 {escrowExists === null ? (
                   <p className="text-sm text-zinc-500">
-                    Enter a beneficiary address and click Refresh to load escrow
-                    data from testnet.
+                    Enter an escrow ID and click Refresh to load escrow data from
+                    testnet.
                   </p>
                 ) : !escrowExists ? (
                   <p className="text-sm text-zinc-400">
-                    No escrow found for this beneficiary address.
+                    No escrow found for this ID.
                   </p>
                 ) : escrowState ? (
                   <dl className="grid gap-4 sm:grid-cols-2">
+                    <div>
+                      <dt className="text-xs uppercase tracking-wide text-zinc-500">
+                        Escrow ID
+                      </dt>
+                      <dd className="mt-1 font-mono text-sm font-semibold text-emerald-300">
+                        {escrowId}
+                      </dd>
+                    </div>
                     <div>
                       <dt className="text-xs uppercase tracking-wide text-zinc-500">
                         Status
@@ -508,6 +544,14 @@ export default function FunderDashboardPage() {
                     </div>
                     <div>
                       <dt className="text-xs uppercase tracking-wide text-zinc-500">
+                        Beneficiary
+                      </dt>
+                      <dd className="mt-1 break-all font-mono text-xs text-zinc-300">
+                        {escrowState.recipient}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs uppercase tracking-wide text-zinc-500">
                         Vendor
                       </dt>
                       <dd className="mt-1 break-all font-mono text-xs text-zinc-300">
@@ -524,8 +568,23 @@ export default function FunderDashboardPage() {
                 Initialize escrow
               </h2>
               <p className="mt-1 text-sm text-zinc-500">
-                Create a new escrow entry locked to Native XLM.
+                Create a new escrow entry locked to Native XLM. A unique escrow
+                ID is generated automatically when you submit.
               </p>
+
+              {escrowId ? (
+                <div className="mt-4 rounded-lg border border-emerald-800/40 bg-emerald-950/30 px-4 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-emerald-400">
+                    Active escrow ID
+                  </p>
+                  <p className="mt-1 font-mono text-sm text-emerald-200">
+                    {escrowId}
+                  </p>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    Share this ID with the beneficiary after initialization.
+                  </p>
+                </div>
+              ) : null}
 
               <form onSubmit={handleInitEscrow} className="mt-6 space-y-4">
                 <FormField
@@ -577,11 +636,11 @@ export default function FunderDashboardPage() {
 
               <form onSubmit={handleFundEscrow} className="mt-6 space-y-4">
                 <FormField
-                  id="fund-beneficiary"
-                  label="Beneficiary address"
-                  value={recipientAddress}
-                  onChange={setRecipientAddress}
-                  placeholder="G…"
+                  id="fund-escrow-id"
+                  label="Escrow ID"
+                  value={escrowId}
+                  onChange={setEscrowId}
+                  placeholder="e.g. 1734876543210"
                   disabled={formsDisabled}
                 />
                 <FormField
@@ -623,11 +682,11 @@ export default function FunderDashboardPage() {
               >
                 <div className="flex-1">
                   <FormField
-                    id="release-beneficiary"
-                    label="Beneficiary address"
-                    value={recipientAddress}
-                    onChange={setRecipientAddress}
-                    placeholder="G…"
+                    id="release-escrow-id"
+                    label="Escrow ID"
+                    value={escrowId}
+                    onChange={setEscrowId}
+                    placeholder="e.g. 1734876543210"
                     disabled={formsDisabled}
                   />
                 </div>
