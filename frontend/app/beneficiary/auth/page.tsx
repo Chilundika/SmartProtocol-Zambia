@@ -70,7 +70,7 @@ function AuthOverlay({ visible }: { visible: boolean }) {
 
 export default function BeneficiaryAuthPage() {
   const router = useRouter();
-  const { isAuthenticated, isBusy, signUp, login } = useEmbeddedWallet();
+  const { isReady, isAuthenticated, isBusy, signUp, login } = useEmbeddedWallet();
 
   const [mode, setMode] = useState<AuthMode>("login");
   const [nrc, setNrc] = useState("");
@@ -78,10 +78,10 @@ export default function BeneficiaryAuthPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (isAuthenticated) {
+    if (isReady && isAuthenticated) {
       router.replace("/beneficiary");
     }
-  }, [isAuthenticated, router]);
+  }, [isReady, isAuthenticated, router]);
 
   const canSubmit =
     nrc.trim().length >= 6 && pin.length === 4 && !isBusy;

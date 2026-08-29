@@ -405,6 +405,7 @@ function readinessMessage(
 export default function BeneficiarySignoffPage() {
   const router = useRouter();
   const {
+    isReady,
     isAuthenticated,
     activeNrc,
     publicKey,
@@ -429,10 +430,10 @@ export default function BeneficiarySignoffPage() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   useEffect(() => {
-    if (!isAuthenticated) {
+    if (isReady && !isAuthenticated) {
       router.replace("/beneficiary/auth");
     }
-  }, [isAuthenticated, router]);
+  }, [isReady, isAuthenticated, router]);
 
   const walletReady = isAuthenticated && publicKey !== null;
   const busy = walletBusy || loadingAction !== null;
@@ -622,13 +623,13 @@ export default function BeneficiarySignoffPage() {
     router.push("/beneficiary/auth");
   };
 
-  const handleDeleteAccount = () => {
-    deleteAccount();
+  const handleDeleteAccount = async () => {
+    await deleteAccount();
     setShowDeleteConfirm(false);
     router.push("/beneficiary/auth");
   };
 
-  if (!isAuthenticated) {
+  if (!isReady || !isAuthenticated) {
     return null;
   }
 
@@ -737,7 +738,8 @@ export default function BeneficiarySignoffPage() {
             {showDeleteConfirm ? (
               <div className="mt-4 rounded-xl border border-red-800/50 bg-red-950/30 p-4">
                 <p className="text-sm text-red-100">
-                  Delete this NRC account from this device? This cannot be undone.
+                  Delete this NRC account from the shared registry? This cannot
+                  be undone.
                 </p>
                 <div className="mt-3 flex gap-3">
                   <button

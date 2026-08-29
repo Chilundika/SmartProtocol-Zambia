@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 
 import { EmbeddedWalletProvider } from "@/src/context/EmbeddedWalletContext";
+import { FunderAuthProvider } from "@/src/context/FunderAuthContext";
+import { VendorWalletProvider } from "@/src/context/VendorWalletContext";
 import { WalletProvider } from "@/src/context/WalletContext";
 import "./globals.css";
 
@@ -19,7 +21,11 @@ export default function RootLayout({
     <html lang="en">
       <body className="antialiased">
         <WalletProvider>
-          <EmbeddedWalletProvider>{children}</EmbeddedWalletProvider>
+          <FunderAuthProvider>
+            <EmbeddedWalletProvider>
+              <VendorWalletProvider>{children}</VendorWalletProvider>
+            </EmbeddedWalletProvider>
+          </FunderAuthProvider>
         </WalletProvider>
       </body>
     </html>

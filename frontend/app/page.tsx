@@ -33,7 +33,7 @@ export default function Home() {
             </p>
           </section>
 
-          <section className="mt-16 grid gap-6 sm:grid-cols-2 lg:mt-20">
+          <section className="mt-16 grid gap-6 sm:grid-cols-2 lg:mt-20 lg:grid-cols-3">
             <article
               id="funder-dashboard"
               className="scroll-mt-24 rounded-2xl border border-emerald-800/30 bg-gradient-to-br from-emerald-950/80 to-zinc-900/80 p-6 shadow-xl shadow-black/20 sm:p-8"
@@ -58,8 +58,9 @@ export default function Home() {
                 For Funders
               </h2>
               <p className="mt-3 text-sm leading-relaxed text-zinc-400 sm:text-base">
-                Initialize escrows, deposit Native XLM, and release payments to
-                vendors only after beneficiaries submit verified milestone proof.
+                Initialize escrows with verified vendors after logging in as an
+                organization, deposit Native XLM, and release payments only after
+                beneficiaries submit milestone proof.
               </p>
               <Link
                 href="/funder"
@@ -104,6 +105,41 @@ export default function Home() {
                 Go to Beneficiary Sign-off →
               </Link>
             </article>
+
+            <article
+              id="vendor-portal"
+              className="scroll-mt-24 rounded-2xl border border-sky-800/30 bg-gradient-to-br from-sky-950/50 to-zinc-900/80 p-6 shadow-xl shadow-black/20 sm:p-8"
+            >
+              <div className="mb-4 flex size-12 items-center justify-center rounded-xl bg-sky-600/20 text-sky-400">
+                <svg
+                  className="size-6"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={1.5}
+                  aria-hidden
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M8.25 18.75a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m3 0h6m-9 0H3.375a1.125 1.125 0 01-1.125-1.125V14.25m17.25 4.5a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m3 0h1.125c.621 0 1.129-.504 1.09-1.124a17.902 17.902 0 00-3.213-9.193 2.056 2.056 0 00-1.58-.86H14.25M16.5 18.75h-2.25m0-11.177v-.958c0-.568-.422-1.048-.987-1.106a48.554 48.554 0 00-10.026 0 1.106 1.106 0 00-.987 1.106v7.635m12-6.677v6.677m0 4.5v-4.5m0 0h-12"
+                  />
+                </svg>
+              </div>
+              <h2 className="text-xl font-semibold text-white sm:text-2xl">
+                For Vendors
+              </h2>
+              <p className="mt-3 text-sm leading-relaxed text-zinc-400 sm:text-base">
+                Register your business, get funder-verified, and watch on-chain
+                escrow status before you dispatch goods.
+              </p>
+              <Link
+                href="/vendor"
+                className="mt-6 inline-flex items-center text-sm font-semibold text-sky-400 transition hover:text-sky-300"
+              >
+                Open Vendor Portal →
+              </Link>
+            </article>
           </section>
 
           <section className="mt-16 rounded-2xl border border-zinc-800 bg-zinc-900/50 px-6 py-8 text-center sm:mt-20 sm:px-10">
@@ -111,7 +147,8 @@ export default function Home() {
               Built on Stellar &amp; Soroban
             </h3>
             <p className="mx-auto mt-2 max-w-2xl text-sm text-zinc-500 sm:text-base">
-              Connect your Freighter wallet to interact with testnet escrows.
+              Funders use Freighter. Beneficiaries and vendors use PIN session
+              wallets on Testnet.
             </p>
           </section>
         </main>

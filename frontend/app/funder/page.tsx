@@ -1,12 +1,14 @@
 "use client";
 
-import { useCallback, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useRouter } from "next/navigation";
 
 import {
   buildFundEscrowTx,
   buildInitEscrowTx,
   buildReleaseFundsTx,
   getEscrowState,
+  resolveVendorIdForInit,
   StellarClientError,
   type EscrowState,
   type EscrowStatusOnChain,
@@ -16,8 +18,19 @@ import {
   TransactionServiceError,
   type TransactionSubmitResult,
 } from "@/src/blockchain/transactionService";
+import { FunderSubnav } from "@/src/components/FunderSubnav";
+import { FunderVendorApprovals } from "@/src/components/FunderVendorApprovals";
 import { Navbar } from "@/src/components/Navbar";
+import { useFunderAuth } from "@/src/context/FunderAuthContext";
 import { useWallet } from "@/src/context/WalletContext";
+import {
+  assignEscrowToVendorAddress,
+  getVendorPayoutAddress,
+  listVerifiedVendors,
+  normalizeVendorId,
+  subscribeVendorRegistry,
+  type VendorProfile,
+} from "@/src/lib/vendorAuth";
 
 const STROOPS_PER_XLM = BigInt(10_000_000);
 const STELLAR_EXPERT_TESTNET_TX =
@@ -263,22 +276,78 @@ function resolveActionError(
 }
 
 export default function FunderDashboardPage() {
+  const router = useRouter();
   const { isConnected, publicKey, isConnecting } = useWallet();
+  const {
+    isReady,
+    isAuthenticated,
+    organizationName,
+    registeredPublicKey,
+  } = useFunderAuth();
+
+  useEffect(() => {
+    if (isReady && !isAuthenticated) {
+      router.replace("/funder/auth");
+    }
+  }, [isReady, isAuthenticated, router]);
 
   const [escrowId, setEscrowId] = useState("");
   const [recipientAddress, setRecipientAddress] = useState("");
-  const [vendorAddress, setVendorAddress] = useState("");
+  const [vendorId, setVendorId] = useState("");
   const [initAmountXlm, setInitAmountXlm] = useState("");
   const [fundAmountXlm, setFundAmountXlm] = useState("");
+
+  const handleInitAmountChange = (value: string) => {
+    setInitAmountXlm(value);
+    setFundAmountXlm(value);
+  };
 
   const [escrowState, setEscrowState] = useState<EscrowState | null>(null);
   const [escrowExists, setEscrowExists] = useState<boolean | null>(null);
 
   const [loadingAction, setLoadingAction] = useState<ActionKey | null>(null);
   const [feedback, setFeedback] = useState<FeedbackState>({ kind: "idle" });
+  const [verifiedVendors, setVerifiedVendors] = useState<VendorProfile[]>([]);
+  const [vendorListError, setVendorListError] = useState<string | null>(null);
+
+  const reloadVerifiedVendors = useCallback(() => {
+    void listVerifiedVendors()
+      .then((vendors) => {
+        setVerifiedVendors(vendors);
+        setVendorListError(null);
+      })
+      .catch((error: unknown) => {
+        setVendorListError(
+          error instanceof Error
+            ? error.message
+            : "Unable to load approved vendors from Supabase.",
+        );
+      });
+  }, []);
+
+  useEffect(() => {
+    reloadVerifiedVendors();
+    return subscribeVendorRegistry(reloadVerifiedVendors);
+  }, [reloadVerifiedVendors]);
 
   const walletReady = isConnected && publicKey !== null;
-  const formsDisabled = !walletReady || isConnecting || loadingAction !== null;
+  const officialKeyMatches =
+    Boolean(publicKey) &&
+    Boolean(registeredPublicKey) &&
+    publicKey === registeredPublicKey;
+  const formsDisabled =
+    !walletReady ||
+    isConnecting ||
+    loadingAction !== null ||
+    !officialKeyMatches;
+  const selectedVendor =
+    verifiedVendors.find(
+      (vendor) => vendor.vendorId === normalizeVendorId(vendorId),
+    ) ?? null;
+  const resolvedVendorAddress =
+    selectedVendor && selectedVendor.status === "verified"
+      ? getVendorPayoutAddress(selectedVendor)
+      : null;
 
   const refreshEscrowState = useCallback(
     async (escrowIdInput: string) => {
@@ -313,8 +382,10 @@ export default function FunderDashboardPage() {
         if (escrowIdForRefresh?.trim()) {
           await refreshEscrowState(escrowIdForRefresh);
         }
+        return true;
       } catch (error) {
         setFeedback(resolveActionError(action, error));
+        return false;
       } finally {
         setLoadingAction(null);
       }
@@ -351,24 +422,36 @@ export default function FunderDashboardPage() {
     }
 
     const recipient = recipientAddress.trim();
-    const vendor = vendorAddress.trim();
+    let vendorPayoutAddress: string;
+
+    try {
+      vendorPayoutAddress = await resolveVendorIdForInit(vendorId);
+    } catch (error) {
+      setFeedback(resolveActionError("init", error));
+      return;
+    }
+
     const newEscrowId = generateEscrowId();
     setEscrowId(String(newEscrowId));
 
-    await runTransaction(
+    const succeeded = await runTransaction(
       "init",
       async () => {
         const amount = parseXlmAmount(initAmountXlm);
         return buildInitEscrowTx(
           newEscrowId,
           publicKey,
-          vendor,
+          vendorPayoutAddress,
           amount,
           recipient,
         );
       },
       String(newEscrowId),
     );
+
+    if (succeeded) {
+      void assignEscrowToVendorAddress(vendorPayoutAddress, String(newEscrowId));
+    }
   };
 
   const handleFundEscrow = async (event: FormEvent<HTMLFormElement>) => {
@@ -418,6 +501,10 @@ export default function FunderDashboardPage() {
     );
   };
 
+  if (!isReady || !isAuthenticated) {
+    return null;
+  }
+
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
       <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-emerald-900/25 via-zinc-950 to-zinc-950" />
@@ -438,9 +525,25 @@ export default function FunderDashboardPage() {
               after beneficiary milestone sign-off. All writes require your
               connected Freighter wallet.
             </p>
-            {walletReady ? (
+            {organizationName ? (
+              <p className="mt-4 text-sm text-emerald-200">
+                Organization:{" "}
+                <span className="font-semibold">{organizationName}</span>
+              </p>
+            ) : null}
+            {registeredPublicKey ? (
+              <p className="mt-1 break-all font-mono text-xs text-emerald-400/90">
+                Official key: {registeredPublicKey}
+              </p>
+            ) : null}
+            {walletReady && !officialKeyMatches ? (
+              <p className="mt-4 rounded-lg border border-amber-800/40 bg-amber-950/30 px-3 py-2 text-sm text-amber-200">
+                Connect the Freighter account that matches this organization&apos;s
+                official public key before submitting transactions.
+              </p>
+            ) : walletReady ? (
               <p className="mt-4 font-mono text-xs text-emerald-400/90">
-                Funder: {publicKey}
+                Freighter connected: {publicKey}
               </p>
             ) : (
               <p className="mt-4 rounded-lg border border-amber-800/40 bg-amber-950/30 px-3 py-2 text-sm text-amber-200">
@@ -449,8 +552,20 @@ export default function FunderDashboardPage() {
             )}
           </header>
 
+          <FunderSubnav />
+
+          <FunderVendorApprovals onRegistryChange={reloadVerifiedVendors} />
+
           <div className="mb-8">
             <FeedbackPanel feedback={feedback} />
+            {vendorListError ? (
+              <p
+                className="mt-4 rounded-xl border border-red-800/50 bg-red-950/40 px-4 py-3 text-sm text-red-200"
+                role="alert"
+              >
+                {vendorListError}
+              </p>
+            ) : null}
           </div>
 
           <div className="grid gap-6 lg:grid-cols-2">
@@ -587,14 +702,59 @@ export default function FunderDashboardPage() {
               ) : null}
 
               <form onSubmit={handleInitEscrow} className="mt-6 space-y-4">
-                <FormField
-                  id="init-vendor"
-                  label="Vendor address"
-                  value={vendorAddress}
-                  onChange={setVendorAddress}
-                  placeholder="G…"
-                  disabled={formsDisabled}
-                />
+                <div>
+                  <label
+                    htmlFor="init-vendor-id"
+                    className="mb-1.5 block text-sm font-medium text-zinc-300"
+                  >
+                    Vendor ID
+                  </label>
+                  <input
+                    id="init-vendor-id"
+                    list="verified-vendor-ids"
+                    value={vendorId}
+                    onChange={(event) =>
+                      setVendorId(
+                        event.target.value.trim().toLowerCase().slice(0, 7),
+                      )
+                    }
+                    placeholder="e.g. cc33791"
+                    disabled={formsDisabled}
+                    autoComplete="off"
+                    className="w-full rounded-lg border border-zinc-700 bg-zinc-900/80 px-3 py-2.5 font-mono text-sm text-white placeholder:text-zinc-600 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+                  />
+                  <datalist id="verified-vendor-ids">
+                    {verifiedVendors.map((vendor) => (
+                      <option
+                        key={vendor.vendorId}
+                        value={vendor.vendorId}
+                        label={`${vendor.fullName} · ${vendor.businessName}`}
+                      />
+                    ))}
+                  </datalist>
+                  {resolvedVendorAddress ? (
+                    <p className="mt-2 break-all font-mono text-xs text-emerald-300">
+                      Resolves to {resolvedVendorAddress}
+                    </p>
+                  ) : vendorId.length === 7 ? (
+                    <p className="mt-2 text-xs text-amber-300">
+                      Vendor ID not found or not yet approved
+                    </p>
+                  ) : (
+                    <p className="mt-1 text-xs text-zinc-500">
+                      Type or select a 7-character Vendor ID. The mapped Stellar
+                      address is filled in automatically. Approve pending vendors
+                      in Vendor Approvals above, or review documents on{" "}
+                      <a
+                        href="/funder/vendors"
+                        className="text-emerald-400 hover:underline"
+                      >
+                        Vendor verification
+                      </a>
+                      .
+                    </p>
+                  )}
+                </div>
                 <FormField
                   id="init-beneficiary"
                   label="Beneficiary address"
@@ -608,10 +768,10 @@ export default function FunderDashboardPage() {
                   label="Amount (XLM)"
                   type="number"
                   value={initAmountXlm}
-                  onChange={setInitAmountXlm}
+                  onChange={handleInitAmountChange}
                   placeholder="10"
                   disabled={formsDisabled}
-                  hint="Stored on-chain in stroops (7 decimal precision)."
+                  hint="Copied into Fund escrow automatically. The on-chain fund amount must match this value."
                 />
 
                 {loadingAction === "init" ? (
@@ -649,8 +809,9 @@ export default function FunderDashboardPage() {
                   type="number"
                   value={fundAmountXlm}
                   onChange={setFundAmountXlm}
-                  placeholder="5"
+                  placeholder="10"
                   disabled={formsDisabled}
+                  hint="Pre-filled from Initialize escrow. You can change it, but it must match the init amount on-chain."
                 />
 
                 {loadingAction === "fund" ? (

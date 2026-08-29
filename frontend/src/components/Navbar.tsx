@@ -5,17 +5,22 @@ import { usePathname } from "next/navigation";
 import { useState } from "react";
 
 import { BeneficiaryWalletButton } from "@/src/components/BeneficiaryWalletButton";
+import { FunderAuthButton } from "@/src/components/FunderAuthButton";
+import { VendorWalletButton } from "@/src/components/VendorWalletButton";
 import { WalletConnectButton } from "@/src/components/WalletConnectButton";
 
 const navLinks = [
   { href: "/funder", label: "Funder Dashboard" },
   { href: "/beneficiary", label: "Beneficiary Sign-off" },
+  { href: "/vendor", label: "Vendor Portal" },
 ] as const;
 
 export function Navbar() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const pathname = usePathname();
   const isBeneficiaryRoute = pathname.startsWith("/beneficiary");
+  const isVendorRoute = pathname.startsWith("/vendor");
+  const isFunderRoute = pathname.startsWith("/funder");
 
   return (
     <header className="sticky top-0 z-50 border-b border-emerald-900/20 bg-zinc-950/80 backdrop-blur-md">
@@ -52,6 +57,10 @@ export function Navbar() {
         <div className="flex items-center gap-2 sm:gap-3">
           {isBeneficiaryRoute ? (
             <BeneficiaryWalletButton />
+          ) : isVendorRoute ? (
+            <VendorWalletButton />
+          ) : isFunderRoute ? (
+            <FunderAuthButton />
           ) : (
             <WalletConnectButton />
           )}

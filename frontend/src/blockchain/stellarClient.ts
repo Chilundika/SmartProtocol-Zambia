@@ -16,6 +16,10 @@ import {
   STELLAR_TESTNET_NETWORK_PASSPHRASE,
   STELLAR_TESTNET_RPC_URL,
 } from "@/src/blockchain/stellarConfig";
+import {
+  resolveVerifiedVendorPayoutAddress,
+  WalletAuthError,
+} from "@/src/lib/vendorAuth";
 
 /** Parsed on-chain escrow status (matches Soroban `EscrowStatus`). */
 export type EscrowStatusOnChain = "Locked" | "Pending" | "Released";
@@ -413,7 +417,26 @@ export async function getEscrowState(
 }
 
 /**
+ * Resolves a 7-character Vendor ID (e.g. cc33791) to the mapped Stellar
+ * payout address. Must be used before `buildInitEscrowTx`.
+ */
+export async function resolveVendorIdForInit(vendorId: string): Promise<string> {
+  try {
+    const stellarAddress = await resolveVerifiedVendorPayoutAddress(vendorId);
+    assertValidAddress("vendor", stellarAddress);
+    return stellarAddress;
+  } catch (error) {
+    if (error instanceof WalletAuthError) {
+      throw new StellarClientError(error.code, error.message);
+    }
+    throw error;
+  }
+}
+
+/**
  * Builds XDR for `init_escrow` (funder must sign & submit).
+ * `vendor` must already be a Stellar public key (`G…`), typically from
+ * {@link resolveVendorIdForInit}.
  * @param amount - Escrow amount in XLM (converted to stroops before packing).
  */
 export async function buildInitEscrowTx(

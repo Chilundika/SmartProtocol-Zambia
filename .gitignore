@@ -14,6 +14,7 @@ contracts/contracts/escrow/test_snapshots/
 .env
 .env.*
 !.env.example
+!frontend/.env.example
 
 # OS & editors
 .DS_Store

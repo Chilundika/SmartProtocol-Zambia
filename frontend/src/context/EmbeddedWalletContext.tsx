@@ -16,6 +16,7 @@ import {
   deleteAccount as deleteStoredAccount,
   getAccountPublicKey,
   getActiveSessionNrc,
+  getActiveSessionPublicKey,
   loginAccount,
   signOutSession,
   unlockActiveAccount,
@@ -23,6 +24,7 @@ import {
 } from "@/src/lib/walletAuth";
 
 export interface EmbeddedWalletContextValue {
+  isReady: boolean;
   isAuthenticated: boolean;
   activeNrc: string | null;
   publicKey: string | null;
@@ -32,7 +34,7 @@ export interface EmbeddedWalletContextValue {
   signUp: (nrc: string, pin: string) => Promise<void>;
   login: (nrc: string, pin: string) => Promise<void>;
   signOut: () => void;
-  deleteAccount: () => void;
+  deleteAccount: () => Promise<void>;
   unlockWithPin: (pin: string) => Promise<void>;
 }
 
@@ -60,24 +62,49 @@ export function EmbeddedWalletProvider({ children }: { children: ReactNode }) {
   const [publicKey, setPublicKey] = useState<string | null>(null);
   const [keypair, setKeypair] = useState<Keypair | null>(null);
   const [isBusy, setIsBusy] = useState(false);
+  const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
     const sessionNrc = getActiveSessionNrc();
     if (!sessionNrc) {
+      setIsReady(true);
       return;
     }
 
-    const storedPublicKey = getAccountPublicKey(sessionNrc);
-    if (!storedPublicKey) {
-      signOutSession();
-      return;
+    const cachedPublicKey = getActiveSessionPublicKey();
+    if (cachedPublicKey) {
+      applySession(sessionNrc, cachedPublicKey, null, {
+        setActiveNrc,
+        setPublicKey,
+        setKeypair,
+      });
+      setIsReady(true);
     }
 
-    applySession(sessionNrc, storedPublicKey, null, {
-      setActiveNrc,
-      setPublicKey,
-      setKeypair,
-    });
+    void getAccountPublicKey(sessionNrc)
+      .then((storedPublicKey) => {
+        if (!storedPublicKey) {
+          signOutSession();
+          setActiveNrc(null);
+          setPublicKey(null);
+          setKeypair(null);
+          return;
+        }
+
+        applySession(sessionNrc, storedPublicKey, null, {
+          setActiveNrc,
+          setPublicKey,
+          setKeypair,
+        });
+      })
+      .catch(() => {
+        if (!cachedPublicKey) {
+          signOutSession();
+        }
+      })
+      .finally(() => {
+        setIsReady(true);
+      });
   }, []);
 
   const signUp = useCallback(async (nrc: string, pin: string) => {
@@ -116,12 +143,12 @@ export function EmbeddedWalletProvider({ children }: { children: ReactNode }) {
     setKeypair(null);
   }, []);
 
-  const deleteAccountHandler = useCallback(() => {
+  const deleteAccountHandler = useCallback(async () => {
     if (!activeNrc) {
       return;
     }
 
-    deleteStoredAccount(activeNrc);
+    await deleteStoredAccount(activeNrc);
     signOutSession();
     setActiveNrc(null);
     setPublicKey(null);
@@ -141,6 +168,7 @@ export function EmbeddedWalletProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<EmbeddedWalletContextValue>(
     () => ({
+      isReady,
       isAuthenticated: activeNrc !== null && publicKey !== null,
       activeNrc,
       publicKey,
@@ -154,6 +182,7 @@ export function EmbeddedWalletProvider({ children }: { children: ReactNode }) {
       unlockWithPin,
     }),
     [
+      isReady,
       activeNrc,
       publicKey,
       keypair,

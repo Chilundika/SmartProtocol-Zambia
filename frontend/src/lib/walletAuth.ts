@@ -1,8 +1,13 @@
 import { Keypair } from "@stellar/stellar-sdk";
+import type { PostgrestError } from "@supabase/supabase-js";
 
-const ACCOUNTS_STORAGE_KEY = "smartprotocol_accounts_v2";
+import {
+  getSupabaseClient,
+  isUniqueConstraintError,
+} from "@/src/lib/supabase";
+
 const ACTIVE_SESSION_KEY = "smartprotocol_active_nrc_v2";
-const LEGACY_STORAGE_KEY = "smartprotocol_embedded_wallet_v1";
+const ACTIVE_PUBLIC_KEY = "smartprotocol_active_beneficiary_pk_v2";
 const PIN_PATTERN = /^\d{4}$/;
 const PBKDF2_ITERATIONS = 100_000;
 const FRIENDBOT_TESTNET_URL = "https://friendbot.stellar.org";
@@ -28,12 +33,16 @@ export interface StoredAccount {
   encryptedKey: string;
 }
 
-export type AccountsDictionary = Record<string, StoredAccount>;
-
 export interface ActiveSession {
   nrc: string;
   publicKey: string;
   keypair: Keypair;
+}
+
+interface BeneficiaryRow {
+  nrc: string;
+  public_key: string;
+  encrypted_key: string;
 }
 
 function assertBrowser(): void {
@@ -42,6 +51,12 @@ function assertBrowser(): void {
       "NOT_IN_BROWSER",
       "Embedded wallet is only available in the browser.",
     );
+  }
+}
+
+function throwQueryError(error: PostgrestError | null, fallback: string): void {
+  if (error) {
+    throw new WalletAuthError("SUPABASE_ERROR", error.message || fallback);
   }
 }
 
@@ -185,28 +200,24 @@ async function decryptSecretKey(
   }
 }
 
-function readAccounts(): AccountsDictionary {
-  assertBrowser();
-
-  const raw = localStorage.getItem(ACCOUNTS_STORAGE_KEY);
-  if (!raw) {
-    return {};
-  }
-
-  try {
-    const parsed = JSON.parse(raw) as AccountsDictionary;
-    if (!parsed || typeof parsed !== "object") {
-      return {};
-    }
-    return parsed;
-  } catch {
-    return {};
-  }
+function mapBeneficiary(row: BeneficiaryRow): StoredAccount {
+  return {
+    publicKey: row.public_key,
+    encryptedKey: row.encrypted_key,
+  };
 }
 
-function writeAccounts(accounts: AccountsDictionary): void {
+async function fetchBeneficiary(nrc: string): Promise<StoredAccount | null> {
   assertBrowser();
-  localStorage.setItem(ACCOUNTS_STORAGE_KEY, JSON.stringify(accounts));
+  const client = getSupabaseClient();
+  const { data, error } = await client
+    .from("beneficiaries")
+    .select("nrc, public_key, encrypted_key")
+    .eq("nrc", nrc)
+    .maybeSingle();
+
+  throwQueryError(error, "Unable to look up this NRC account.");
+  return data ? mapBeneficiary(data as BeneficiaryRow) : null;
 }
 
 function keypairFromSecret(secretKey: string): Keypair {
@@ -263,32 +274,22 @@ export async function fundTestnetAccount(publicKey: string): Promise<void> {
   );
 }
 
-/** Returns true when at least one NRC account exists on this device. */
-export function hasAnyAccount(): boolean {
-  if (typeof window === "undefined") {
-    return false;
-  }
-  return Object.keys(readAccounts()).length > 0;
-}
-
 /** Returns true when the given NRC already has a stored account. */
-export function accountExists(nrc: string): boolean {
+export async function accountExists(nrc: string): Promise<boolean> {
   const normalized = normalizeNrc(nrc);
   if (!normalized) {
     return false;
   }
-  return readAccounts()[normalized] !== undefined;
+  return (await fetchBeneficiary(normalized)) !== null;
 }
 
 /** Returns the stored public key for an NRC without requiring the PIN. */
-export function getAccountPublicKey(nrc: string): string | null {
+export async function getAccountPublicKey(nrc: string): Promise<string | null> {
   const normalized = normalizeNrc(nrc);
-  return readAccounts()[normalized]?.publicKey ?? null;
-}
-
-/** Returns all registered NRC numbers on this device. */
-export function listAccountNrcs(): string[] {
-  return Object.keys(readAccounts());
+  if (!normalized) {
+    return null;
+  }
+  return (await fetchBeneficiary(normalized))?.publicKey ?? null;
 }
 
 /** Returns the active session NRC from sessionStorage, if any. */
@@ -298,20 +299,28 @@ export function getActiveSessionNrc(): string | null {
   return nrc ? normalizeNrc(nrc) : null;
 }
 
-function setActiveSessionNrc(nrc: string): void {
+/** Returns the cached public key for the active tab session, if any. */
+export function getActiveSessionPublicKey(): string | null {
+  assertBrowser();
+  return sessionStorage.getItem(ACTIVE_PUBLIC_KEY);
+}
+
+function setActiveSession(nrc: string, publicKey: string): void {
   assertBrowser();
   sessionStorage.setItem(ACTIVE_SESSION_KEY, normalizeNrc(nrc));
+  sessionStorage.setItem(ACTIVE_PUBLIC_KEY, publicKey);
 }
 
 /** Clears the in-memory/browser-tab active session without deleting stored accounts. */
 export function signOutSession(): void {
   assertBrowser();
   sessionStorage.removeItem(ACTIVE_SESSION_KEY);
+  sessionStorage.removeItem(ACTIVE_PUBLIC_KEY);
 }
 
 /**
  * Creates a new account for the given NRC: generates a keypair, funds it
- * on testnet, encrypts the secret with the PIN, and saves to localStorage.
+ * on testnet, encrypts the secret with the PIN, and upserts to Supabase.
  */
 export async function createAccount(
   nrc: string,
@@ -320,10 +329,10 @@ export async function createAccount(
   validatePin(pin);
   const normalizedNrc = validateNrc(nrc);
 
-  if (accountExists(normalizedNrc)) {
+  if (await accountExists(normalizedNrc)) {
     throw new WalletAuthError(
       "NRC_EXISTS",
-      "An account with this NRC already exists on this device. Log in instead.",
+      "An account with this NRC already exists. Log in instead.",
     );
   }
 
@@ -333,14 +342,21 @@ export async function createAccount(
   await fundTestnetAccount(publicKey);
 
   const encrypted = await encryptSecretKey(keypair.secret(), pin);
-  const accounts = readAccounts();
+  const client = getSupabaseClient();
+  const { error } = await client.from("beneficiaries").insert({
+    nrc: normalizedNrc,
+    public_key: publicKey,
+    encrypted_key: JSON.stringify(encrypted),
+  });
 
-  accounts[normalizedNrc] = {
-    publicKey,
-    encryptedKey: JSON.stringify(encrypted),
-  };
+  if (isUniqueConstraintError(error)) {
+    throw new WalletAuthError(
+      "NRC_EXISTS",
+      "An account with this NRC already exists. Log in instead.",
+    );
+  }
 
-  writeAccounts(accounts);
+  throwQueryError(error, "Unable to save this NRC account.");
 
   return { nrc: normalizedNrc, publicKey };
 }
@@ -356,7 +372,7 @@ export async function loginAccount(
   validatePin(pin);
   const normalizedNrc = validateNrc(nrc);
 
-  const account = readAccounts()[normalizedNrc];
+  const account = await fetchBeneficiary(normalizedNrc);
   if (!account) {
     throw new WalletAuthError(
       "NRC_NOT_FOUND",
@@ -374,7 +390,7 @@ export async function loginAccount(
     );
   }
 
-  setActiveSessionNrc(normalizedNrc);
+  setActiveSession(normalizedNrc, account.publicKey);
 
   return {
     nrc: normalizedNrc,
@@ -401,30 +417,27 @@ export async function unlockActiveAccount(pin: string): Promise<Keypair> {
   return session.keypair;
 }
 
-/** Deletes a specific NRC account from localStorage. */
-export function deleteAccount(nrc: string): void {
+/** Deletes a specific NRC account from the beneficiaries table. */
+export async function deleteAccount(nrc: string): Promise<void> {
   const normalizedNrc = validateNrc(nrc);
-  const accounts = readAccounts();
+  const existing = await fetchBeneficiary(normalizedNrc);
 
-  if (!accounts[normalizedNrc]) {
+  if (!existing) {
     throw new WalletAuthError(
       "NRC_NOT_FOUND",
       "No account found for this NRC.",
     );
   }
 
-  delete accounts[normalizedNrc];
-  writeAccounts(accounts);
+  const client = getSupabaseClient();
+  const { error } = await client
+    .from("beneficiaries")
+    .delete()
+    .eq("nrc", normalizedNrc);
+
+  throwQueryError(error, "Unable to delete this NRC account.");
 
   if (getActiveSessionNrc() === normalizedNrc) {
     signOutSession();
   }
-}
-
-/** Removes all locally stored accounts (testing / reset helper). */
-export function clearAllAccounts(): void {
-  assertBrowser();
-  localStorage.removeItem(ACCOUNTS_STORAGE_KEY);
-  localStorage.removeItem(LEGACY_STORAGE_KEY);
-  signOutSession();
 }
