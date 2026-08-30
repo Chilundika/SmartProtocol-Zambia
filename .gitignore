@@ -23,5 +23,7 @@ Thumbs.db
 .vscode/
 *.log
 
+# Supabase
+supabase/.temp/
 
-milestonememorydump.md
+milestonememorydump.mdsupabase/.temp/

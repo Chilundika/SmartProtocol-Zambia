@@ -8,8 +8,93 @@ import {
   useEmbeddedWallet,
   WalletAuthError,
 } from "@/src/context/EmbeddedWalletContext";
+import { describeLockout } from "@/src/lib/walletAuth";
 
 type AuthMode = "login" | "signup";
+
+/**
+ * "locked" and "assistance" are shown differently from a plain error: a wrong
+ * PIN is worth retrying, a lockout is worth waiting out, and a migration
+ * failure cannot be resolved by the user at all.
+ */
+type AuthNoticeKind = "error" | "locked" | "assistance";
+
+interface AuthNotice {
+  kind: AuthNoticeKind;
+  message: string;
+  retryAt?: string;
+}
+
+function classifyAuthError(error: unknown): AuthNotice {
+  if (error instanceof WalletAuthError) {
+    if (error.code === "ACCOUNT_LOCKED" || error.code === "RATE_LIMITED") {
+      return {
+        kind: "locked",
+        message: error.message,
+        retryAt: error.retryAt,
+      };
+    }
+
+    if (
+      error.code === "ACCOUNT_MIGRATION_REQUIRED" ||
+      error.code === "WALLET_UNLOCK_FAILED" ||
+      error.code === "CORRUPT_WALLET"
+    ) {
+      return { kind: "assistance", message: error.message };
+    }
+
+    return { kind: "error", message: error.message };
+  }
+
+  if (error instanceof Error) {
+    return { kind: "error", message: error.message };
+  }
+
+  return { kind: "error", message: "Authentication failed. Please try again." };
+}
+
+function AuthNoticePanel({ notice }: { notice: AuthNotice }) {
+  if (notice.kind === "locked") {
+    return (
+      <div
+        className="rounded-lg border border-orange-700/60 bg-orange-950/40 px-3 py-3 text-sm text-orange-100"
+        role="alert"
+      >
+        <p className="font-semibold">Account temporarily locked</p>
+        <p className="mt-1 leading-relaxed text-orange-200">{notice.message}</p>
+        <p className="mt-2 text-xs text-orange-300/80">
+          This limit protects your wallet from someone guessing your PIN. Your
+          funds are unaffected.
+        </p>
+      </div>
+    );
+  }
+
+  if (notice.kind === "assistance") {
+    return (
+      <div
+        className="rounded-lg border border-sky-800/60 bg-sky-950/40 px-3 py-3 text-sm text-sky-100"
+        role="alert"
+      >
+        <p className="font-semibold">This account needs assistance</p>
+        <p className="mt-1 leading-relaxed text-sky-200">{notice.message}</p>
+        <p className="mt-2 text-xs text-sky-300/80">
+          Contact your programme administrator with your NRC number to have
+          access restored.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <p
+      className="rounded-lg border border-red-800/50 bg-red-950/40 px-3 py-2 text-sm text-red-200"
+      role="alert"
+    >
+      {notice.message}
+    </p>
+  );
+}
 
 function Spinner({ label }: { label: string }) {
   return (
@@ -75,7 +160,8 @@ export default function BeneficiaryAuthPage() {
   const [mode, setMode] = useState<AuthMode>("login");
   const [nrc, setNrc] = useState("");
   const [pin, setPin] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<AuthNotice | null>(null);
+  const [lockedUntil, setLockedUntil] = useState<number | null>(null);
 
   useEffect(() => {
     if (isReady && isAuthenticated) {
@@ -83,12 +169,41 @@ export default function BeneficiaryAuthPage() {
     }
   }, [isReady, isAuthenticated, router]);
 
+  // Re-enable the form the moment the lockout expires, so the user is not stuck
+  // looking at a disabled button after the wait is over.
+  useEffect(() => {
+    if (lockedUntil === null) {
+      return;
+    }
+
+    const remaining = lockedUntil - Date.now();
+    if (remaining <= 0) {
+      setLockedUntil(null);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setLockedUntil(null);
+      setNotice(null);
+    }, remaining);
+
+    return () => clearTimeout(timer);
+  }, [lockedUntil]);
+
+  const isLockedOut = lockedUntil !== null;
   const canSubmit =
-    nrc.trim().length >= 6 && pin.length === 4 && !isBusy;
+    nrc.trim().length >= 6 && pin.length === 4 && !isBusy && !isLockedOut;
+  const inputsDisabled = isBusy || isLockedOut;
+
+  const submitLabel = isLockedOut
+    ? describeLockout(new Date(lockedUntil).toISOString())
+    : mode === "signup"
+      ? "Register"
+      : "Log In";
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setError(null);
+    setNotice(null);
 
     try {
       if (mode === "signup") {
@@ -98,13 +213,17 @@ export default function BeneficiaryAuthPage() {
       }
       router.push("/beneficiary");
     } catch (submitError) {
-      if (submitError instanceof WalletAuthError) {
-        setError(submitError.message);
-      } else if (submitError instanceof Error) {
-        setError(submitError.message);
-      } else {
-        setError("Authentication failed. Please try again.");
+      const classified = classifyAuthError(submitError);
+      setNotice(classified);
+
+      if (classified.kind === "locked" && classified.retryAt) {
+        const expiresAt = new Date(classified.retryAt).getTime();
+        setLockedUntil(Number.isFinite(expiresAt) ? expiresAt : null);
       }
+
+      // Clear the PIN so a locked-out user is not staring at the digits that
+      // just failed, and cannot resubmit them by reflex.
+      setPin("");
     }
   };
 
@@ -136,7 +255,7 @@ export default function BeneficiaryAuthPage() {
               type="button"
               onClick={() => {
                 setMode("login");
-                setError(null);
+                setNotice(null);
               }}
               className={`flex-1 rounded-lg px-4 py-2.5 text-sm font-semibold transition ${
                 mode === "login"
@@ -150,7 +269,7 @@ export default function BeneficiaryAuthPage() {
               type="button"
               onClick={() => {
                 setMode("signup");
-                setError(null);
+                setNotice(null);
               }}
               className={`flex-1 rounded-lg px-4 py-2.5 text-sm font-semibold transition ${
                 mode === "signup"
@@ -176,7 +295,7 @@ export default function BeneficiaryAuthPage() {
                   type="text"
                   value={nrc}
                   onChange={(event) => setNrc(event.target.value)}
-                  disabled={isBusy}
+                  disabled={inputsDisabled}
                   placeholder="123456/11/1"
                   autoComplete="username"
                   className="mt-2 w-full rounded-xl border-2 border-zinc-700 bg-zinc-950 px-4 py-3 font-mono text-sm text-white placeholder:text-zinc-600 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/30 disabled:opacity-50"
@@ -200,17 +319,13 @@ export default function BeneficiaryAuthPage() {
                   onChange={(event) =>
                     setPin(event.target.value.replace(/\D/g, "").slice(0, 4))
                   }
-                  disabled={isBusy}
+                  disabled={inputsDisabled}
                   autoComplete={mode === "login" ? "current-password" : "new-password"}
                   className="mt-2 w-full rounded-xl border-2 border-zinc-700 bg-zinc-950 px-4 py-3 text-center font-mono text-xl tracking-[0.4em] text-white focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/30 disabled:opacity-50"
                 />
               </div>
 
-              {error ? (
-                <p className="rounded-lg border border-red-800/50 bg-red-950/40 px-3 py-2 text-sm text-red-200" role="alert">
-                  {error}
-                </p>
-              ) : null}
+              {notice ? <AuthNoticePanel notice={notice} /> : null}
 
               <button
                 type="submit"
@@ -218,15 +333,11 @@ export default function BeneficiaryAuthPage() {
                 className="flex min-h-12 w-full items-center justify-center rounded-xl bg-amber-500 px-4 py-3 text-base font-bold text-zinc-950 transition hover:bg-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-300 focus:ring-offset-2 focus:ring-offset-zinc-900 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {isBusy ? (
-                  mode === "signup" ? (
-                    <Spinner label="Registering…" />
-                  ) : (
-                    <Spinner label="Logging in…" />
-                  )
-                ) : mode === "signup" ? (
-                  "Register"
+                  <Spinner
+                    label={mode === "signup" ? "Registering…" : "Logging in…"}
+                  />
                 ) : (
-                  "Log In"
+                  submitLabel
                 )}
               </button>
             </form>

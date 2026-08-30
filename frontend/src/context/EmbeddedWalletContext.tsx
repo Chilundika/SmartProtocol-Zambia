@@ -34,8 +34,9 @@ export interface EmbeddedWalletContextValue {
   signUp: (nrc: string, pin: string) => Promise<void>;
   login: (nrc: string, pin: string) => Promise<void>;
   signOut: () => void;
-  deleteAccount: () => Promise<void>;
-  unlockWithPin: (pin: string) => Promise<void>;
+  deleteAccount: (pin: string) => Promise<void>;
+  /** Returns the unlocked keypair so callers never need a second PIN check. */
+  unlockWithPin: (pin: string) => Promise<Keypair>;
 }
 
 const EmbeddedWalletContext = createContext<
@@ -143,17 +144,25 @@ export function EmbeddedWalletProvider({ children }: { children: ReactNode }) {
     setKeypair(null);
   }, []);
 
-  const deleteAccountHandler = useCallback(async () => {
-    if (!activeNrc) {
-      return;
-    }
+  const deleteAccountHandler = useCallback(
+    async (pin: string) => {
+      if (!activeNrc) {
+        return;
+      }
 
-    await deleteStoredAccount(activeNrc);
-    signOutSession();
-    setActiveNrc(null);
-    setPublicKey(null);
-    setKeypair(null);
-  }, [activeNrc]);
+      setIsBusy(true);
+      try {
+        await deleteStoredAccount(activeNrc, pin);
+        signOutSession();
+        setActiveNrc(null);
+        setPublicKey(null);
+        setKeypair(null);
+      } finally {
+        setIsBusy(false);
+      }
+    },
+    [activeNrc],
+  );
 
   const unlockWithPin = useCallback(async (pin: string) => {
     setIsBusy(true);
@@ -161,6 +170,7 @@ export function EmbeddedWalletProvider({ children }: { children: ReactNode }) {
       const unlocked = await unlockActiveAccount(pin);
       setKeypair(unlocked);
       setPublicKey(unlocked.publicKey());
+      return unlocked;
     } finally {
       setIsBusy(false);
     }

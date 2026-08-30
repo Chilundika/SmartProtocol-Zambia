@@ -17,7 +17,7 @@ import {
 } from "@/src/blockchain/transactionService";
 import { Navbar } from "@/src/components/Navbar";
 import { useEmbeddedWallet } from "@/src/context/EmbeddedWalletContext";
-import { loginAccount, WalletAuthError } from "@/src/lib/walletAuth";
+import { WalletAuthError } from "@/src/lib/walletAuth";
 
 const STROOPS_PER_XLM = BigInt(10_000_000);
 const STELLAR_EXPERT_TESTNET_TX =
@@ -428,6 +428,9 @@ export default function BeneficiarySignoffPage() {
   const [pendingProofHash, setPendingProofHash] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deletePin, setDeletePin] = useState("");
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   useEffect(() => {
     if (isReady && !isAuthenticated) {
@@ -597,9 +600,9 @@ export default function BeneficiarySignoffPage() {
         if (!activeNrc) {
           throw new Error("No active session. Please log in again.");
         }
-        const session = await loginAccount(activeNrc, pin);
-        signingKeypair = session.keypair;
-        await unlockWithPin(pin);
+        // One verify-pin round trip. Unlocking used to run twice here, which
+        // burned two lockout attempts per wrong PIN.
+        signingKeypair = await unlockWithPin(pin);
       }
 
       if (!pendingProofHash) {
@@ -623,10 +626,29 @@ export default function BeneficiarySignoffPage() {
     router.push("/beneficiary/auth");
   };
 
-  const handleDeleteAccount = async () => {
-    await deleteAccount();
+  const closeDeleteConfirm = () => {
     setShowDeleteConfirm(false);
-    router.push("/beneficiary/auth");
+    setDeletePin("");
+    setDeleteError(null);
+  };
+
+  const handleDeleteAccount = async () => {
+    setDeleteError(null);
+    setDeleteBusy(true);
+
+    try {
+      await deleteAccount(deletePin);
+      closeDeleteConfirm();
+      router.push("/beneficiary/auth");
+    } catch (error) {
+      setDeleteError(
+        error instanceof Error
+          ? error.message
+          : "Unable to delete this account.",
+      );
+    } finally {
+      setDeleteBusy(false);
+    }
   };
 
   if (!isReady || !isAuthenticated) {
@@ -741,20 +763,52 @@ export default function BeneficiarySignoffPage() {
                   Delete this NRC account from the shared registry? This cannot
                   be undone.
                 </p>
+                <label
+                  htmlFor="delete-pin"
+                  className="mt-4 block text-xs font-semibold uppercase tracking-wide text-red-200"
+                >
+                  Confirm with your 4-digit PIN
+                </label>
+                <input
+                  id="delete-pin"
+                  type="password"
+                  inputMode="numeric"
+                  pattern="\d{4}"
+                  maxLength={4}
+                  value={deletePin}
+                  onChange={(event) =>
+                    setDeletePin(
+                      event.target.value.replace(/\D/g, "").slice(0, 4),
+                    )
+                  }
+                  disabled={deleteBusy}
+                  autoComplete="current-password"
+                  className="mt-2 w-full max-w-50 rounded-lg border-2 border-red-900/70 bg-zinc-950 px-3 py-2 text-center font-mono text-lg tracking-[0.4em] text-white focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/30 disabled:opacity-50"
+                />
+                {deleteError ? (
+                  <p
+                    className="mt-3 rounded-lg border border-red-700/60 bg-red-950/60 px-3 py-2 text-sm text-red-100"
+                    role="alert"
+                  >
+                    {deleteError}
+                  </p>
+                ) : null}
                 <div className="mt-3 flex gap-3">
                   <button
                     type="button"
-                    onClick={() => setShowDeleteConfirm(false)}
-                    className="rounded-lg border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300"
+                    onClick={closeDeleteConfirm}
+                    disabled={deleteBusy}
+                    className="rounded-lg border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 disabled:opacity-50"
                   >
                     Cancel
                   </button>
                   <button
                     type="button"
-                    onClick={handleDeleteAccount}
-                    className="rounded-lg bg-red-700 px-3 py-1.5 text-sm font-semibold text-white hover:bg-red-600"
+                    onClick={() => void handleDeleteAccount()}
+                    disabled={deleteBusy || deletePin.length !== 4}
+                    className="rounded-lg bg-red-700 px-3 py-1.5 text-sm font-semibold text-white hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    Confirm Delete
+                    {deleteBusy ? "Deleting…" : "Confirm Delete"}
                   </button>
                 </div>
               </div>
