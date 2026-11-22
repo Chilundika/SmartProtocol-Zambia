@@ -1,7 +1,10 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::{testutils::Address as _, token, Address, BytesN, Env};
+use soroban_sdk::{
+    testutils::{Address as _, MockAuth, MockAuthInvoke},
+    token, Address, BytesN, Env, IntoVal,
+};
 
 const ESCROW_ID: u64 = 1;
 const ESCROW_ID_2: u64 = 2;
@@ -80,6 +83,31 @@ impl EscrowHarness {
     fn to_released(&self) {
         self.to_pending();
         self.submit_valid_proof();
+    }
+
+    /// Replaces recording auth with an empty enforcing set.
+    /// The next contract call has no signer authorization.
+    fn enforce_no_auth(&self) {
+        self.env.set_auths(&[]);
+    }
+
+    /// Authorizes `signer` for one invocation. A call that requires a
+    /// different address fails that address's `require_auth`.
+    fn authorize_other(
+        &self,
+        signer: &Address,
+        fn_name: &str,
+        args: soroban_sdk::Vec<soroban_sdk::Val>,
+    ) {
+        self.env.mock_auths(&[MockAuth {
+            address: signer,
+            invoke: &MockAuthInvoke {
+                contract: &self.client.address,
+                fn_name,
+                args,
+                sub_invokes: &[],
+            },
+        }]);
     }
 }
 
@@ -283,4 +311,303 @@ fn release_funds_rejects_empty_escrow() {
 fn release_funds_rejects_unknown_id() {
     let h = EscrowHarness::new();
     h.client.release_funds(&999, &h.funder);
+}
+
+// ---------------------------------------------------------------------------
+// Authorization. EscrowHarness::new() calls mock_all_auths() so setup can
+// mint and move state. Each test then calls enforce_no_auth or
+// authorize_other, which replaces that auth configuration before the call
+// under test.
+// ---------------------------------------------------------------------------
+
+#[test]
+#[should_panic(expected = "HostError: Error(Auth, InvalidAction)")]
+fn auth_init_escrow_rejects_missing_auth() {
+    let h = EscrowHarness::new();
+    h.enforce_no_auth();
+    h.client.init_escrow(
+        &h.escrow_id,
+        &h.funder,
+        &h.native_xlm,
+        &h.vendor,
+        &h.beneficiary,
+        &h.amount,
+    );
+}
+
+#[test]
+#[should_panic(expected = "HostError: Error(Auth, InvalidAction)")]
+fn auth_init_escrow_rejects_other_signer() {
+    let h = EscrowHarness::new();
+    let impostor = Address::generate(&h.env);
+    h.authorize_other(
+        &impostor,
+        "init_escrow",
+        (
+            h.escrow_id,
+            h.funder.clone(),
+            h.native_xlm.clone(),
+            h.vendor.clone(),
+            h.beneficiary.clone(),
+            h.amount,
+        )
+            .into_val(&h.env),
+    );
+    h.client.init_escrow(
+        &h.escrow_id,
+        &h.funder,
+        &h.native_xlm,
+        &h.vendor,
+        &h.beneficiary,
+        &h.amount,
+    );
+}
+
+#[test]
+#[should_panic(expected = "HostError: Error(Auth, InvalidAction)")]
+fn auth_fund_escrow_rejects_missing_auth() {
+    let h = EscrowHarness::new();
+    h.init_locked();
+    h.enforce_no_auth();
+    h.client
+        .fund_escrow(&h.escrow_id, &h.funder, &h.amount);
+}
+
+#[test]
+#[should_panic(expected = "HostError: Error(Auth, InvalidAction)")]
+fn auth_fund_escrow_rejects_other_signer() {
+    let h = EscrowHarness::new();
+    h.init_locked();
+    let impostor = Address::generate(&h.env);
+    h.authorize_other(
+        &impostor,
+        "fund_escrow",
+        (h.escrow_id, h.funder.clone(), h.amount).into_val(&h.env),
+    );
+    h.client
+        .fund_escrow(&h.escrow_id, &h.funder, &h.amount);
+}
+
+#[test]
+#[should_panic(expected = "HostError: Error(Auth, InvalidAction)")]
+fn auth_submit_proof_rejects_missing_auth() {
+    let h = EscrowHarness::new();
+    h.to_pending();
+    h.enforce_no_auth();
+    let proof_hash = BytesN::from_array(&h.env, &[1u8; 32]);
+    h.client
+        .submit_proof(&h.escrow_id, &h.beneficiary, &proof_hash);
+}
+
+#[test]
+#[should_panic(expected = "HostError: Error(Auth, InvalidAction)")]
+fn auth_submit_proof_rejects_other_signer() {
+    let h = EscrowHarness::new();
+    h.to_pending();
+    let impostor = Address::generate(&h.env);
+    let proof_hash = BytesN::from_array(&h.env, &[1u8; 32]);
+    h.authorize_other(
+        &impostor,
+        "submit_proof",
+        (h.escrow_id, h.beneficiary.clone(), proof_hash.clone()).into_val(&h.env),
+    );
+    h.client
+        .submit_proof(&h.escrow_id, &h.beneficiary, &proof_hash);
+}
+
+#[test]
+#[should_panic(expected = "HostError: Error(Auth, InvalidAction)")]
+fn auth_release_funds_rejects_missing_auth() {
+    let h = EscrowHarness::new();
+    h.to_released();
+    h.enforce_no_auth();
+    h.client.release_funds(&h.escrow_id, &h.funder);
+}
+
+#[test]
+#[should_panic(expected = "HostError: Error(Auth, InvalidAction)")]
+fn auth_release_funds_rejects_other_signer() {
+    let h = EscrowHarness::new();
+    h.to_released();
+    let impostor = Address::generate(&h.env);
+    h.authorize_other(
+        &impostor,
+        "release_funds",
+        (h.escrow_id, h.funder.clone()).into_val(&h.env),
+    );
+    h.client.release_funds(&h.escrow_id, &h.funder);
+}
+
+/// `get_escrow` has no `require_auth`. A read still returns the stored record
+/// when the environment is in enforcing mode with no authorizations.
+#[test]
+fn auth_get_escrow_returns_record_without_auth() {
+    let h = EscrowHarness::new();
+    h.init_locked();
+    h.enforce_no_auth();
+    let escrow = h.client.get_escrow(&h.escrow_id).unwrap();
+    assert_eq!(escrow.funder, h.funder);
+    assert_eq!(escrow.vendor, h.vendor);
+    assert_eq!(escrow.recipient, h.beneficiary);
+    assert_eq!(escrow.amount, h.amount);
+    assert_eq!(escrow.status, EscrowStatus::Locked);
+}
+
+// ---------------------------------------------------------------------------
+// Input validation
+// ---------------------------------------------------------------------------
+
+#[test]
+#[should_panic(expected = "amount must be positive")]
+fn input_init_escrow_rejects_negative_amount() {
+    let h = EscrowHarness::new();
+    h.client.init_escrow(
+        &h.escrow_id,
+        &h.funder,
+        &h.native_xlm,
+        &h.vendor,
+        &h.beneficiary,
+        &-1,
+    );
+}
+
+#[test]
+#[should_panic(expected = "native_xlm_token mismatch")]
+fn input_init_escrow_rejects_native_token_mismatch() {
+    let h = EscrowHarness::new();
+    h.init_locked();
+    let other_admin = Address::generate(&h.env);
+    let other_token = h
+        .env
+        .register_stellar_asset_contract_v2(other_admin)
+        .address();
+    h.client.init_escrow(
+        &ESCROW_ID_2,
+        &h.funder,
+        &other_token,
+        &h.vendor,
+        &h.beneficiary,
+        &h.amount,
+    );
+}
+
+#[test]
+#[should_panic(expected = "amount mismatch")]
+fn input_fund_escrow_rejects_negative_amount() {
+    let h = EscrowHarness::new();
+    h.init_locked();
+    h.client.fund_escrow(&h.escrow_id, &h.funder, &-1);
+}
+
+#[test]
+#[should_panic(expected = "escrow not found")]
+fn input_submit_proof_rejects_unknown_id() {
+    let h = EscrowHarness::new();
+    let proof_hash = BytesN::from_array(&h.env, &[5u8; 32]);
+    h.client
+        .submit_proof(&999, &h.beneficiary, &proof_hash);
+}
+
+// ---------------------------------------------------------------------------
+// State transitions
+// ---------------------------------------------------------------------------
+
+#[test]
+fn state_get_escrow_unknown_id_returns_none() {
+    let h = EscrowHarness::new();
+    h.init_locked();
+    assert!(h.client.get_escrow(&999).is_none());
+    assert!(h.client.get_escrow(&h.escrow_id).is_some());
+}
+
+#[test]
+#[should_panic(expected = "escrow must be Locked")]
+fn state_fund_escrow_rejects_after_release() {
+    let h = EscrowHarness::new();
+    h.to_released();
+    h.client
+        .fund_escrow(&h.escrow_id, &h.funder, &h.amount);
+}
+
+#[test]
+#[should_panic(expected = "escrow must be Pending")]
+fn state_submit_proof_rejects_after_payout() {
+    let h = EscrowHarness::new();
+    h.to_released();
+    h.client.release_funds(&h.escrow_id, &h.funder);
+    let proof_hash = BytesN::from_array(&h.env, &[6u8; 32]);
+    h.client
+        .submit_proof(&h.escrow_id, &h.beneficiary, &proof_hash);
+}
+
+#[test]
+fn state_get_escrow_after_payout_is_released_with_zero_amount() {
+    let h = EscrowHarness::new();
+    h.to_released();
+    h.client.release_funds(&h.escrow_id, &h.funder);
+
+    let stored = h.client.get_escrow(&h.escrow_id).unwrap();
+    assert_eq!(stored.status, EscrowStatus::Released);
+    assert_eq!(stored.amount, 0);
+    assert_eq!(stored.funder, h.funder);
+    assert_eq!(stored.vendor, h.vendor);
+    assert_eq!(stored.recipient, h.beneficiary);
+}
+
+/// Two non-zero hashes leave stored records that compare equal. `EscrowData`
+/// has no proof-hash field, so the hash used is not retained.
+#[test]
+fn state_submit_proof_distinct_hashes_store_equal_records() {
+    let h = EscrowHarness::new();
+    h.to_pending();
+    let hash_a = BytesN::from_array(&h.env, &[1u8; 32]);
+    h.client
+        .submit_proof(&h.escrow_id, &h.beneficiary, &hash_a);
+
+    h.client.init_escrow(
+        &ESCROW_ID_2,
+        &h.funder,
+        &h.native_xlm,
+        &h.vendor,
+        &h.beneficiary,
+        &h.amount,
+    );
+    // The harness mints one escrow amount. Fund the second escrow from a second mint.
+    let asset_client = token::StellarAssetClient::new(&h.env, &h.native_xlm);
+    asset_client.mint(&h.funder, &h.amount);
+    h.client
+        .fund_escrow(&ESCROW_ID_2, &h.funder, &h.amount);
+    let hash_b = BytesN::from_array(&h.env, &[9u8; 32]);
+    h.client
+        .submit_proof(&ESCROW_ID_2, &h.beneficiary, &hash_b);
+
+    let first = h.client.get_escrow(&ESCROW_ID).unwrap();
+    let second = h.client.get_escrow(&ESCROW_ID_2).unwrap();
+    assert_ne!(hash_a, hash_b);
+    assert_eq!(first, second);
+    assert_eq!(first.status, EscrowStatus::Released);
+    assert_eq!(first.amount, h.amount);
+}
+
+// ---------------------------------------------------------------------------
+// Duplicate operations
+// ---------------------------------------------------------------------------
+
+#[test]
+#[should_panic(expected = "escrow must be Pending")]
+fn dup_submit_proof_rejects_second_proof() {
+    let h = EscrowHarness::new();
+    h.to_released();
+    let proof_hash = BytesN::from_array(&h.env, &[7u8; 32]);
+    h.client
+        .submit_proof(&h.escrow_id, &h.beneficiary, &proof_hash);
+}
+
+#[test]
+fn dup_get_escrow_second_read_matches_first() {
+    let h = EscrowHarness::new();
+    h.init_locked();
+    let first = h.client.get_escrow(&h.escrow_id).unwrap();
+    let second = h.client.get_escrow(&h.escrow_id).unwrap();
+    assert_eq!(first, second);
 }
