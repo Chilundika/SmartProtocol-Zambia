@@ -24,6 +24,14 @@ import { Navbar } from "@/src/components/Navbar";
 import { useFunderAuth } from "@/src/context/FunderAuthContext";
 import { useWallet } from "@/src/context/WalletContext";
 import {
+  canonicalEscrowAuditId,
+  confirmedTransactionFeedback,
+} from "@/src/lib/confirmedEscrow";
+import {
+  recordConfirmedEscrowTransaction,
+  type EscrowTransactionOperation,
+} from "@/src/lib/transactionAudit";
+import {
   assignEscrowToVendorAddress,
   getVendorPayoutAddress,
   listVerifiedVendors,
@@ -37,10 +45,17 @@ const STELLAR_EXPERT_TESTNET_TX =
   "https://stellar.expert/explorer/testnet/tx" as const;
 
 type ActionKey = "init" | "fund" | "release" | "status";
+type WriteActionKey = Exclude<ActionKey, "status">;
 
 type FeedbackState =
   | { kind: "idle" }
-  | { kind: "success"; action: ActionKey; result: TransactionSubmitResult }
+  | {
+      kind: "success";
+      action: ActionKey;
+      result: TransactionSubmitResult;
+      auditWarning?: string;
+      refreshWarning?: string;
+    }
   | {
       kind: "error";
       action: ActionKey;
@@ -152,6 +167,17 @@ function FeedbackPanel({ feedback }: { feedback: FeedbackState }) {
         >
           View on Stellar Expert →
         </a>
+        {feedback.auditWarning ? (
+          <p className="mt-3 text-xs leading-relaxed text-amber-200" role="status">
+            Transaction succeeded, but the audit record could not be saved: {" "}
+            {feedback.auditWarning}
+          </p>
+        ) : null}
+        {feedback.refreshWarning ? (
+          <p className="mt-3 text-xs leading-relaxed text-amber-200" role="status">
+            {feedback.refreshWarning}
+          </p>
+        ) : null}
       </div>
     );
   }
@@ -367,9 +393,9 @@ export default function FunderDashboardPage() {
 
   const runTransaction = useCallback(
     async (
-      action: ActionKey,
+      action: WriteActionKey,
       buildXdr: () => Promise<string>,
-      escrowIdForRefresh?: string,
+      escrowIdForRefresh: string,
     ) => {
       setLoadingAction(action);
       setFeedback({ kind: "idle" });
@@ -377,10 +403,53 @@ export default function FunderDashboardPage() {
       try {
         const xdr = await buildXdr();
         const result = await signAndSubmitTransaction(xdr);
-        setFeedback({ kind: "success", action, result });
+        const operation: EscrowTransactionOperation =
+          action === "init"
+            ? "init_escrow"
+            : action === "fund"
+              ? "fund_escrow"
+              : "release_funds";
+        let auditError: unknown;
 
-        if (escrowIdForRefresh?.trim()) {
-          await refreshEscrowState(escrowIdForRefresh);
+        try {
+          await recordConfirmedEscrowTransaction({
+            operation,
+            escrowId: escrowIdForRefresh,
+            result,
+          });
+        } catch (error) {
+          auditError = error;
+          console.error("[funder] transaction audit recording failed", error);
+        }
+
+        const recorded = confirmedTransactionFeedback({ auditError });
+        setFeedback({
+          kind: "success",
+          action,
+          result,
+          auditWarning: recorded.auditWarning,
+        });
+
+        try {
+          if (escrowIdForRefresh.trim()) {
+            await refreshEscrowState(escrowIdForRefresh);
+          }
+        } catch (refreshError) {
+          console.error(
+            "[funder] post-confirmation status refresh failed",
+            refreshError,
+          );
+          const followedUp = confirmedTransactionFeedback({
+            auditError,
+            refreshError,
+          });
+          setFeedback({
+            kind: "success",
+            action,
+            result,
+            auditWarning: followedUp.auditWarning,
+            refreshWarning: followedUp.refreshWarning,
+          });
         }
         return true;
       } catch (error) {
@@ -432,7 +501,8 @@ export default function FunderDashboardPage() {
     }
 
     const newEscrowId = generateEscrowId();
-    setEscrowId(String(newEscrowId));
+    const escrowIdForAudit = canonicalEscrowAuditId(newEscrowId);
+    setEscrowId(escrowIdForAudit);
 
     const succeeded = await runTransaction(
       "init",
@@ -446,11 +516,11 @@ export default function FunderDashboardPage() {
           recipient,
         );
       },
-      String(newEscrowId),
+      escrowIdForAudit,
     );
 
     if (succeeded) {
-      void assignEscrowToVendorAddress(vendorPayoutAddress, String(newEscrowId));
+      void assignEscrowToVendorAddress(vendorPayoutAddress, escrowIdForAudit);
     }
   };
 
@@ -475,7 +545,7 @@ export default function FunderDashboardPage() {
         const amount = parseXlmAmount(fundAmountXlm);
         return buildFundEscrowTx(parsedEscrowId, publicKey, amount);
       },
-      escrowId,
+      canonicalEscrowAuditId(parsedEscrowId),
     );
   };
 
@@ -497,7 +567,7 @@ export default function FunderDashboardPage() {
     await runTransaction(
       "release",
       async () => buildReleaseFundsTx(parsedEscrowId, publicKey),
-      escrowId,
+      canonicalEscrowAuditId(parsedEscrowId),
     );
   };
 

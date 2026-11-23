@@ -17,6 +17,11 @@ import {
 } from "@/src/blockchain/transactionService";
 import { Navbar } from "@/src/components/Navbar";
 import { useEmbeddedWallet } from "@/src/context/EmbeddedWalletContext";
+import {
+  canonicalEscrowAuditId,
+  confirmedTransactionFeedback,
+} from "@/src/lib/confirmedEscrow";
+import { recordConfirmedEscrowTransaction } from "@/src/lib/transactionAudit";
 import { WalletAuthError } from "@/src/lib/walletAuth";
 
 const STROOPS_PER_XLM = BigInt(10_000_000);
@@ -27,7 +32,13 @@ type ActionKey = "lookup" | "proof";
 
 type FeedbackState =
   | { kind: "idle" }
-  | { kind: "success"; action: "proof"; result: TransactionSubmitResult }
+  | {
+      kind: "success";
+      action: "proof";
+      result: TransactionSubmitResult;
+      auditWarning?: string;
+      refreshWarning?: string;
+    }
   | {
       kind: "error";
       action: ActionKey;
@@ -224,6 +235,17 @@ function FeedbackBanner({ feedback }: { feedback: FeedbackState }) {
           >
             View on Stellar Expert
         </a>
+        {feedback.auditWarning ? (
+          <p className="mt-3 text-xs leading-relaxed text-amber-200" role="status">
+            Transaction succeeded, but the audit record could not be saved: {" "}
+            {feedback.auditWarning}
+          </p>
+        ) : null}
+        {feedback.refreshWarning ? (
+          <p className="mt-3 text-xs leading-relaxed text-amber-200" role="status">
+            {feedback.refreshWarning}
+          </p>
+        ) : null}
       </div>
     );
   }
@@ -537,9 +559,47 @@ export default function BeneficiarySignoffPage() {
         normalizedHash,
       );
       const result = await signAndSubmitWithKeypair(xdr, signingKeypair);
+      const escrowIdForAudit = canonicalEscrowAuditId(parsedEscrowId);
+      let auditError: unknown;
 
-      setFeedback({ kind: "success", action: "proof", result });
-      await refreshEscrowState(escrowId, publicKey);
+      try {
+        await recordConfirmedEscrowTransaction({
+          operation: "submit_proof",
+          escrowId: escrowIdForAudit,
+          result,
+        });
+      } catch (error) {
+        auditError = error;
+        console.error("[beneficiary] transaction audit recording failed", error);
+      }
+
+      const recorded = confirmedTransactionFeedback({ auditError });
+      setFeedback({
+        kind: "success",
+        action: "proof",
+        result,
+        auditWarning: recorded.auditWarning,
+      });
+
+      try {
+        await refreshEscrowState(escrowIdForAudit, publicKey);
+      } catch (refreshError) {
+        console.error(
+          "[beneficiary] post-confirmation status refresh failed",
+          refreshError,
+        );
+        const followedUp = confirmedTransactionFeedback({
+          auditError,
+          refreshError,
+        });
+        setFeedback({
+          kind: "success",
+          action: "proof",
+          result,
+          auditWarning: followedUp.auditWarning,
+          refreshWarning: followedUp.refreshWarning,
+        });
+      }
     } catch (error) {
       setFeedback(resolveActionError("proof", error));
     } finally {
