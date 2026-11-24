@@ -15,8 +15,10 @@ import {
   TransactionServiceError,
   type TransactionSubmitResult,
 } from "@/src/blockchain/transactionService";
+import { EscrowNotificationList } from "@/src/components/EscrowNotificationList";
 import { Navbar } from "@/src/components/Navbar";
 import { useEmbeddedWallet } from "@/src/context/EmbeddedWalletContext";
+import { useEscrowLifecycleNotifications } from "@/src/hooks/useEscrowLifecycleNotifications";
 import {
   canonicalEscrowAuditId,
   confirmedTransactionFeedback,
@@ -711,6 +713,11 @@ export default function BeneficiarySignoffPage() {
     }
   };
 
+  const escrowNotifications = useEscrowLifecycleNotifications({
+    escrowId,
+    sourceAddress: publicKey,
+  });
+
   if (!isReady || !isAuthenticated) {
     return null;
   }
@@ -762,6 +769,8 @@ export default function BeneficiarySignoffPage() {
               proof that milestones were met — no browser extension required.
             </p>
           </header>
+
+          <EscrowNotificationList notifications={escrowNotifications} />
 
           <div className="mb-6 space-y-4">
             <FeedbackBanner feedback={feedback} />

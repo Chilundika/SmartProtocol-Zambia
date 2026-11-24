@@ -18,10 +18,12 @@ import {
   TransactionServiceError,
   type TransactionSubmitResult,
 } from "@/src/blockchain/transactionService";
+import { EscrowNotificationList } from "@/src/components/EscrowNotificationList";
 import { FunderSubnav } from "@/src/components/FunderSubnav";
 import { FunderVendorApprovals } from "@/src/components/FunderVendorApprovals";
 import { Navbar } from "@/src/components/Navbar";
 import { useFunderAuth } from "@/src/context/FunderAuthContext";
+import { useEscrowLifecycleNotifications } from "@/src/hooks/useEscrowLifecycleNotifications";
 import { useWallet } from "@/src/context/WalletContext";
 import {
   canonicalEscrowAuditId,
@@ -571,6 +573,11 @@ export default function FunderDashboardPage() {
     );
   };
 
+  const escrowNotifications = useEscrowLifecycleNotifications({
+    escrowId,
+    sourceAddress: publicKey,
+  });
+
   if (!isReady || !isAuthenticated) {
     return null;
   }
@@ -625,6 +632,8 @@ export default function FunderDashboardPage() {
           <FunderSubnav />
 
           <FunderVendorApprovals onRegistryChange={reloadVerifiedVendors} />
+
+          <EscrowNotificationList notifications={escrowNotifications} />
 
           <div className="mb-8">
             <FeedbackPanel feedback={feedback} />
