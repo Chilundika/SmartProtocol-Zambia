@@ -15,6 +15,7 @@ import {
   TransactionServiceError,
   type TransactionSubmitResult,
 } from "@/src/blockchain/transactionService";
+import { EscrowAuditHistory } from "@/src/components/EscrowAuditHistory";
 import { EscrowNotificationList } from "@/src/components/EscrowNotificationList";
 import { Navbar } from "@/src/components/Navbar";
 import { useEmbeddedWallet } from "@/src/context/EmbeddedWalletContext";
@@ -444,6 +445,8 @@ export default function BeneficiarySignoffPage() {
   const [escrowId, setEscrowId] = useState("");
   const [escrowState, setEscrowState] = useState<EscrowState | null>(null);
   const [escrowExists, setEscrowExists] = useState<boolean | null>(null);
+  const [loadedEscrowId, setLoadedEscrowId] = useState<string | null>(null);
+  const [historyRevision, setHistoryRevision] = useState(0);
   const [proofHash, setProofHash] = useState("");
   const [loadingAction, setLoadingAction] = useState<ActionKey | null>(null);
   const [feedback, setFeedback] = useState<FeedbackState>({ kind: "idle" });
@@ -479,6 +482,12 @@ export default function BeneficiarySignoffPage() {
       const result = await getEscrowState(parsedEscrowId, beneficiary);
       setEscrowExists(result.exists);
       setEscrowState(result.escrow ?? null);
+      if (result.exists && result.escrow) {
+        setLoadedEscrowId(canonicalEscrowAuditId(parsedEscrowId));
+        setHistoryRevision((revision) => revision + 1);
+      } else {
+        setLoadedEscrowId(null);
+      }
       return result;
     },
     [],
@@ -537,6 +546,7 @@ export default function BeneficiarySignoffPage() {
     } catch (error) {
       setEscrowExists(null);
       setEscrowState(null);
+      setLoadedEscrowId(null);
       setFeedback(resolveActionError("lookup", error));
     } finally {
       setLoadingAction(null);
@@ -956,7 +966,8 @@ export default function BeneficiarySignoffPage() {
                   </p>
                 </div>
 
-                {escrowExists && escrowState ? (
+                {escrowExists && escrowState && loadedEscrowId ? (
+                  <>
                   <dl className="mt-5 grid gap-4 border-t border-zinc-800 pt-5">
                     <div className="flex items-center justify-between gap-3">
                       <dt className="text-xs font-semibold uppercase text-zinc-500">
@@ -998,6 +1009,13 @@ export default function BeneficiarySignoffPage() {
                       </dd>
                     </div>
                   </dl>
+                  <EscrowAuditHistory
+                    escrowId={loadedEscrowId}
+                    refreshKey={historyRevision}
+                    status={escrowState.status}
+                    balanceXlm={stroopsToXlmDisplay(escrowState.amount)}
+                  />
+                  </>
                 ) : null}
               </section>
 

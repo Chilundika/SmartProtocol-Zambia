@@ -18,6 +18,7 @@ import {
   TransactionServiceError,
   type TransactionSubmitResult,
 } from "@/src/blockchain/transactionService";
+import { EscrowAuditHistory } from "@/src/components/EscrowAuditHistory";
 import { EscrowNotificationList } from "@/src/components/EscrowNotificationList";
 import { FunderSubnav } from "@/src/components/FunderSubnav";
 import { FunderVendorApprovals } from "@/src/components/FunderVendorApprovals";
@@ -332,6 +333,8 @@ export default function FunderDashboardPage() {
 
   const [escrowState, setEscrowState] = useState<EscrowState | null>(null);
   const [escrowExists, setEscrowExists] = useState<boolean | null>(null);
+  const [loadedEscrowId, setLoadedEscrowId] = useState<string | null>(null);
+  const [historyRevision, setHistoryRevision] = useState(0);
 
   const [loadingAction, setLoadingAction] = useState<ActionKey | null>(null);
   const [feedback, setFeedback] = useState<FeedbackState>({ kind: "idle" });
@@ -389,6 +392,12 @@ export default function FunderDashboardPage() {
 
       setEscrowExists(result.exists);
       setEscrowState(result.escrow ?? null);
+      if (result.exists && result.escrow) {
+        setLoadedEscrowId(canonicalEscrowAuditId(parsedEscrowId));
+        setHistoryRevision((revision) => revision + 1);
+      } else {
+        setLoadedEscrowId(null);
+      }
     },
     [publicKey],
   );
@@ -473,6 +482,7 @@ export default function FunderDashboardPage() {
     } catch (error) {
       setEscrowExists(null);
       setEscrowState(null);
+      setLoadedEscrowId(null);
       setFeedback(resolveActionError("status", error));
     } finally {
       setLoadingAction(null);
@@ -695,7 +705,8 @@ export default function FunderDashboardPage() {
                   <p className="text-sm text-zinc-400">
                     No escrow found for this ID.
                   </p>
-                ) : escrowState ? (
+                ) : escrowState && loadedEscrowId ? (
+                  <>
                   <dl className="grid gap-4 sm:grid-cols-2">
                     <div>
                       <dt className="text-xs uppercase tracking-wide text-zinc-500">
@@ -753,6 +764,13 @@ export default function FunderDashboardPage() {
                       </dd>
                     </div>
                   </dl>
+                  <EscrowAuditHistory
+                    escrowId={loadedEscrowId}
+                    refreshKey={historyRevision}
+                    status={escrowState.status}
+                    balanceXlm={stroopsToXlmDisplay(escrowState.amount)}
+                  />
+                  </>
                 ) : null}
               </div>
             </section>
