@@ -100,4 +100,4 @@ Limits of this run:
 - `input_init_escrow_rejects_negative_amount` uses `-1`. `i128::MIN` is not a separate case. Zero is covered by the existing test.
 - `state_submit_proof_distinct_hashes_store_equal_records` mints a second amount because the harness mints only one escrow amount. That mint is test setup.
 - These tests do not reach the `native_xlm_token not initialized` panic in `lib.rs:213-217`. Funding a missing id fails earlier with `escrow not found` (`fund_escrow_rejects_unknown_id`).
-- Nothing in this suite runs against Testnet, Mainnet, or the deployed contract id. Passing here does not prove the deployed bytecode matches this source.
+- Nothing in this suite runs against Testnet, Mainnet, or the deployed contract `CDZD44LXVV4RO7A224YMIFWGIMZ5ZFWCO6AJRYPHLZ5EBMYUAT4TP2BQ`. Passing here does not prove the deployed bytecode matches this source.

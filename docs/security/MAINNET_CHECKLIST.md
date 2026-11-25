@@ -4,7 +4,7 @@ Status: **not Mainnet-ready**. This is a readiness record for the Security Harde
 
 Mainnet deployment, Mainnet funds, and contract redeployment are out of scope. They stay blocked until an independent third-party security audit is finished and every gate below is PASS.
 
-Reviewed from `sprint/instawards` at `b5bff64aed29`. Claims below use files in that tree. This review did not query a live database, did not call Stellar RPC, did not apply a migration, and did not deploy an Edge Function or a contract.
+Reviewed from `sprint/instawards` at `cbc4951cff3b0591eea5368722a3c0ec74783a6a`. Claims below use files in that tree, plus the rollback `supabase/rollbacks/0004_stellar_transaction_audit_rollback.sql`. This review did not query a live database, did not call Stellar RPC, did not apply a migration, and did not deploy an Edge Function or a contract.
 
 A gate is PASS only when the repository proves the requirement. FAIL means the requirement is unmet or the repository does not prove it.
 
@@ -37,7 +37,7 @@ This pass covers the host suite and the written report only. The same report say
 
 The repository does not contain a recorded Testnet run of `init_escrow`, `fund_escrow`, `submit_proof`, and `release_funds` against the contract ID in `frontend/src/blockchain/stellarConfig.ts`.
 
-`QA_TEST.md` is a playbook, not a completed result. It names contract `CABMN45ARQKZ6ISJUXHVDGB236U6IEIC2ZO2V24YZB6D7JQOUVL5VFCH` and says there is no `/vendor` page. The current frontend config names a different contract ID, and `frontend/app/vendor/page.tsx` exists. That playbook cannot be used as evidence for the current tree.
+`QA_TEST.md` is a playbook, not a completed result. It now names contract `CDZD44LXVV4RO7A224YMIFWGIMZ5ZFWCO6AJRYPHLZ5EBMYUAT4TP2BQ` and the `/vendor` page. It does not record a completed Testnet run, so it still cannot be used as evidence for the current tree.
 
 Pass requires a written Testnet result for the current contract ID: each of the four writes, the signer for that write, the transaction hash, the ledger status, and the escrow state read back after each step.
 
@@ -74,13 +74,13 @@ Pass requires a recorded Testnet check for each role: the account that signed or
 
 **FAIL.**
 
-The repository contains migration files `supabase/migrations/0001_beneficiaries_pin_lockout.sql`, `0002_beneficiary_pin_backfill_audit.sql`, `0003_beneficiary_backfill_tokens.sql`, and `0004_stellar_transaction_audit.sql`. It contains Edge Function source at `supabase/functions/beneficiary-auth/index.ts` and `supabase/functions/transaction-audit/index.ts`. `0004` says to apply it before deploying `transaction-audit`.
+The repository contains migration files `supabase/migrations/0001_beneficiaries_pin_lockout.sql`, `0002_beneficiary_pin_backfill_audit.sql`, `0003_beneficiary_backfill_tokens.sql`, and `0004_stellar_transaction_audit.sql`. It contains Edge Function source at `supabase/functions/beneficiary-auth/index.ts`, `supabase/functions/transaction-audit/index.ts`, and `supabase/functions/escrow-audit-history/index.ts`. `0004` says to apply it before deploying `transaction-audit`. `escrow-audit-history` reads that table and re-verifies each stored hash.
 
-This tree does not record that those migrations were applied to a hosted database, or that either function was deployed. `0004` and `transaction-audit` were committed in `b5bff64aed29` and were not applied or deployed in that work.
+This tree does not record that those migrations were applied to a hosted database, or that the three functions were deployed. `0004` and `transaction-audit` were committed in `b5bff64aed29`. `escrow-audit-history` was committed in `cbc4951cff3b0591eea5368722a3c0ec74783a6a`.
 
-`docs/beneficiary_auth_deployment_runbook.md` describes a manual staging-then-production sequence for beneficiary auth. It tells the operator to run `supabase/migrations/0001_beneficiaries_pin_lockout_rollback.sql`. The rollback file in this repository is `supabase/rollbacks/0001_beneficiaries_pin_lockout_rollback.sql`.
+`docs/beneficiary_auth_deployment_runbook.md` describes a manual staging-then-production sequence for beneficiary auth. It tells the operator to run `supabase/migrations/0001_beneficiaries_pin_lockout_rollback.sql`. The rollback file in this repository is `supabase/rollbacks/0001_beneficiaries_pin_lockout_rollback.sql`. A rollback for the audit table now exists at `supabase/rollbacks/0004_stellar_transaction_audit_rollback.sql`. This checklist does not apply it.
 
-Pass requires a dated record for the target project: each migration applied, both functions deployed, and the verification queries from the runbook and from the comment at the end of `0004` actually run. Expected audit-table policy query result is zero rows.
+Pass requires a dated record for the target project: each migration applied, all three functions deployed, and the verification queries from the runbook and from the comment at the end of `0004` actually run. Expected audit-table policy query result is zero rows.
 
 ## 6. Vercel environment configuration
 
@@ -124,7 +124,7 @@ This checklist does not record a live database query. The blocker is the schema 
 
 The repository does not contain an incident-response procedure, an on-call contact, a monitoring configuration, or an alert destination.
 
-Rollback coverage is incomplete. The only rollback script is `supabase/rollbacks/0001_beneficiaries_pin_lockout_rollback.sql`. The beneficiary runbook cites a path under `supabase/migrations/` for that script. There is no rollback script for migrations `0002`, `0003`, or `0004`, and no recorded rollback drill.
+Rollback coverage is incomplete. Scripts exist for `0001` (`supabase/rollbacks/0001_beneficiaries_pin_lockout_rollback.sql`) and `0004` (`supabase/rollbacks/0004_stellar_transaction_audit_rollback.sql`). The beneficiary runbook cites a path under `supabase/migrations/` for the 0001 script. There is still no rollback script for migrations `0002` or `0003`, and no recorded rollback drill.
 
 Audit logging is source only. `0002` defines `beneficiary_pin_backfills`. `0004` defines `stellar_transaction_audit`, and `transaction-audit` is written to insert a row only after a Testnet `getTransaction` result is `SUCCESS` and the returned envelope matches the submitted signer, contract, function, and escrow ID. Neither the apply of those tables nor a check of a real audit row is recorded here.
 
