@@ -1,5 +1,7 @@
 # SmartProtocol Zambia - Final Deliverable Report
 
+> **Superseded for contract identity.** This report describes an earlier Testnet deployment. The frontend now targets escrow contract `CDZD44LXVV4RO7A224YMIFWGIMZ5ZFWCO6AJRYPHLZ5EBMYUAT4TP2BQ` in `frontend/src/blockchain/stellarConfig.ts`. Every `CABMN45ARQKZ6ISJUXHVDGB236U6IEIC2ZO2V24YZB6D7JQOUVL5VFCH` reference below is historical and is not the current contract.
+
 **Project:** SmartProtocol Zambia (Verified Milestone Payouts)  
 **Network:** Stellar Testnet  
 **Live Application:** [https://smartprotocol-zm.vercel.app/](https://smartprotocol-zm.vercel.app/)  

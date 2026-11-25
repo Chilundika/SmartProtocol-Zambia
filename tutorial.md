@@ -608,27 +608,21 @@ Contract on testnet:
 
 ---
 
-## For developers: rebuild & redeploy contract
+## For developers: contract dry-run
 
-If you change the Rust contract in `contracts/contracts/escrow/`:
+The deploy helper is dry-run only. It does not deploy to Testnet or Mainnet, and it does not change the contract id in `frontend/src/blockchain/stellarConfig.ts`.
+
+From the repository root:
 
 ```bash
-# Tests (16 unit tests)
-cd contracts/contracts/escrow && cargo test
-
-# Build from contracts/ (not repo root)
-cd contracts
-stellar contract build
-
-stellar contract deploy \
-  --wasm target/wasm32v1-none/release/escrow.wasm \
-  --source-account deployer \
-  --network testnet
+bash contracts/scripts/deploy-escrow.sh
 ```
 
-WASM path is `contracts/target/wasm32v1-none/release/escrow.wasm`. Deploy from the **`contracts/`** directory.
+That prints the Testnet wasm path `contracts/target/wasm32v1-none/release/escrow.wasm` and the source-account label `deployer`. It does not call the Stellar CLI. A Mainnet network name is refused:
 
-Update `ESCROW_FACTORY_CONTRACT_ID` in `frontend/src/blockchain/stellarConfig.ts` with the new `C…` address, then restart the dev server.
+```bash
+bash contracts/scripts/deploy-escrow.sh --network mainnet
+```
 
 Vendor verification is **off-chain** (local registry). The app blocks unverified vendors on `init_escrow`; the Soroban contract itself still accepts any vendor address if called outside the UI.
 

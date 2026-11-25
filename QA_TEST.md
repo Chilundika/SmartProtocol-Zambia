@@ -5,7 +5,7 @@ Live, end-to-end transaction test for the local Next.js application (`localhost:
 **Environment**
 
 - **Blockchain:** Stellar Testnet
-- **Escrow contract:** `CABMN45ARQKZ6ISJUXHVDGB236U6IEIC2ZO2V24YZB6D7JQOUVL5VFCH`
+- **Escrow contract:** `CDZD44LXVV4RO7A224YMIFWGIMZ5ZFWCO6AJRYPHLZ5EBMYUAT4TP2BQ`
 - **Config:** `frontend/src/blockchain/stellarConfig.ts` (Testnet)
 - **Local app:** `yarn dev` → `http://localhost:3000`
 - **Wallets:** 3 Chrome profiles, each with Freighter on Stellar Testnet
@@ -26,9 +26,9 @@ Live, end-to-end transaction test for the local Next.js application (`localhost:
 | `http://localhost:3000/funder` | Profile 1 (Funder) | `init_escrow`, `fund_escrow`, `release_funds`, status reader |
 | `http://localhost:3000/beneficiary` | Profile 2 (Beneficiary) | `submit_proof`, delivery lookup |
 
-There is **no `/vendor` page**. The vendor (Profile 3) observes payout via **Freighter balance** and/or the **Funder Dashboard escrow status reader** (any profile can open `/funder` read-only for status).
+The vendor dashboard is **`/vendor`**. Profile 3 signs in there and watches escrows for its payout address. Payout release stays on the Funder dashboard.
 
-**On-chain contract:** `CABMN45ARQKZ6ISJUXHVDGB236U6IEIC2ZO2V24YZB6D7JQOUVL5VFCH` (Testnet)
+**On-chain contract:** `CDZD44LXVV4RO7A224YMIFWGIMZ5ZFWCO6AJRYPHLZ5EBMYUAT4TP2BQ` (Testnet)
 
 **Status machine:** `Locked` → `Pending` → `Released` → vendor paid (`amount` zeroed)
 
@@ -268,7 +268,7 @@ Example manual extraction in console:
 
 For each of the 4 hashes, confirm on Testnet explorer:
 
-1. **Init** — `init_escrow` on contract `CABMN…`
+1. **Init** — `init_escrow` on contract `CDZD44LXVV4RO7A224YMIFWGIMZ5ZFWCO6AJRYPHLZ5EBMYUAT4TP2BQ`
 2. **Fund** — XLM SAC transfer into escrow; status → Pending
 3. **Proof** — `submit_proof` by beneficiary; status → Released
 4. **Release** — XLM transfer to `G_VENDOR…`; escrow amount → 0

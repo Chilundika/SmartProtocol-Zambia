@@ -18,11 +18,22 @@ import {
   TransactionServiceError,
   type TransactionSubmitResult,
 } from "@/src/blockchain/transactionService";
+import { EscrowAuditHistory } from "@/src/components/EscrowAuditHistory";
+import { EscrowNotificationList } from "@/src/components/EscrowNotificationList";
 import { FunderSubnav } from "@/src/components/FunderSubnav";
 import { FunderVendorApprovals } from "@/src/components/FunderVendorApprovals";
 import { Navbar } from "@/src/components/Navbar";
 import { useFunderAuth } from "@/src/context/FunderAuthContext";
+import { useEscrowLifecycleNotifications } from "@/src/hooks/useEscrowLifecycleNotifications";
 import { useWallet } from "@/src/context/WalletContext";
+import {
+  canonicalEscrowAuditId,
+  confirmedTransactionFeedback,
+} from "@/src/lib/confirmedEscrow";
+import {
+  recordConfirmedEscrowTransaction,
+  type EscrowTransactionOperation,
+} from "@/src/lib/transactionAudit";
 import {
   assignEscrowToVendorAddress,
   getVendorPayoutAddress,
@@ -37,10 +48,17 @@ const STELLAR_EXPERT_TESTNET_TX =
   "https://stellar.expert/explorer/testnet/tx" as const;
 
 type ActionKey = "init" | "fund" | "release" | "status";
+type WriteActionKey = Exclude<ActionKey, "status">;
 
 type FeedbackState =
   | { kind: "idle" }
-  | { kind: "success"; action: ActionKey; result: TransactionSubmitResult }
+  | {
+      kind: "success";
+      action: ActionKey;
+      result: TransactionSubmitResult;
+      auditWarning?: string;
+      refreshWarning?: string;
+    }
   | {
       kind: "error";
       action: ActionKey;
@@ -152,6 +170,17 @@ function FeedbackPanel({ feedback }: { feedback: FeedbackState }) {
         >
           View on Stellar Expert →
         </a>
+        {feedback.auditWarning ? (
+          <p className="mt-3 text-xs leading-relaxed text-amber-200" role="status">
+            Transaction succeeded, but the audit record could not be saved: {" "}
+            {feedback.auditWarning}
+          </p>
+        ) : null}
+        {feedback.refreshWarning ? (
+          <p className="mt-3 text-xs leading-relaxed text-amber-200" role="status">
+            {feedback.refreshWarning}
+          </p>
+        ) : null}
       </div>
     );
   }
@@ -304,6 +333,8 @@ export default function FunderDashboardPage() {
 
   const [escrowState, setEscrowState] = useState<EscrowState | null>(null);
   const [escrowExists, setEscrowExists] = useState<boolean | null>(null);
+  const [loadedEscrowId, setLoadedEscrowId] = useState<string | null>(null);
+  const [historyRevision, setHistoryRevision] = useState(0);
 
   const [loadingAction, setLoadingAction] = useState<ActionKey | null>(null);
   const [feedback, setFeedback] = useState<FeedbackState>({ kind: "idle" });
@@ -361,15 +392,21 @@ export default function FunderDashboardPage() {
 
       setEscrowExists(result.exists);
       setEscrowState(result.escrow ?? null);
+      if (result.exists && result.escrow) {
+        setLoadedEscrowId(canonicalEscrowAuditId(parsedEscrowId));
+        setHistoryRevision((revision) => revision + 1);
+      } else {
+        setLoadedEscrowId(null);
+      }
     },
     [publicKey],
   );
 
   const runTransaction = useCallback(
     async (
-      action: ActionKey,
+      action: WriteActionKey,
       buildXdr: () => Promise<string>,
-      escrowIdForRefresh?: string,
+      escrowIdForRefresh: string,
     ) => {
       setLoadingAction(action);
       setFeedback({ kind: "idle" });
@@ -377,10 +414,53 @@ export default function FunderDashboardPage() {
       try {
         const xdr = await buildXdr();
         const result = await signAndSubmitTransaction(xdr);
-        setFeedback({ kind: "success", action, result });
+        const operation: EscrowTransactionOperation =
+          action === "init"
+            ? "init_escrow"
+            : action === "fund"
+              ? "fund_escrow"
+              : "release_funds";
+        let auditError: unknown;
 
-        if (escrowIdForRefresh?.trim()) {
-          await refreshEscrowState(escrowIdForRefresh);
+        try {
+          await recordConfirmedEscrowTransaction({
+            operation,
+            escrowId: escrowIdForRefresh,
+            result,
+          });
+        } catch (error) {
+          auditError = error;
+          console.error("[funder] transaction audit recording failed", error);
+        }
+
+        const recorded = confirmedTransactionFeedback({ auditError });
+        setFeedback({
+          kind: "success",
+          action,
+          result,
+          auditWarning: recorded.auditWarning,
+        });
+
+        try {
+          if (escrowIdForRefresh.trim()) {
+            await refreshEscrowState(escrowIdForRefresh);
+          }
+        } catch (refreshError) {
+          console.error(
+            "[funder] post-confirmation status refresh failed",
+            refreshError,
+          );
+          const followedUp = confirmedTransactionFeedback({
+            auditError,
+            refreshError,
+          });
+          setFeedback({
+            kind: "success",
+            action,
+            result,
+            auditWarning: followedUp.auditWarning,
+            refreshWarning: followedUp.refreshWarning,
+          });
         }
         return true;
       } catch (error) {
@@ -402,6 +482,7 @@ export default function FunderDashboardPage() {
     } catch (error) {
       setEscrowExists(null);
       setEscrowState(null);
+      setLoadedEscrowId(null);
       setFeedback(resolveActionError("status", error));
     } finally {
       setLoadingAction(null);
@@ -432,7 +513,8 @@ export default function FunderDashboardPage() {
     }
 
     const newEscrowId = generateEscrowId();
-    setEscrowId(String(newEscrowId));
+    const escrowIdForAudit = canonicalEscrowAuditId(newEscrowId);
+    setEscrowId(escrowIdForAudit);
 
     const succeeded = await runTransaction(
       "init",
@@ -446,11 +528,11 @@ export default function FunderDashboardPage() {
           recipient,
         );
       },
-      String(newEscrowId),
+      escrowIdForAudit,
     );
 
     if (succeeded) {
-      void assignEscrowToVendorAddress(vendorPayoutAddress, String(newEscrowId));
+      void assignEscrowToVendorAddress(vendorPayoutAddress, escrowIdForAudit);
     }
   };
 
@@ -475,7 +557,7 @@ export default function FunderDashboardPage() {
         const amount = parseXlmAmount(fundAmountXlm);
         return buildFundEscrowTx(parsedEscrowId, publicKey, amount);
       },
-      escrowId,
+      canonicalEscrowAuditId(parsedEscrowId),
     );
   };
 
@@ -497,9 +579,14 @@ export default function FunderDashboardPage() {
     await runTransaction(
       "release",
       async () => buildReleaseFundsTx(parsedEscrowId, publicKey),
-      escrowId,
+      canonicalEscrowAuditId(parsedEscrowId),
     );
   };
+
+  const escrowNotifications = useEscrowLifecycleNotifications({
+    escrowId,
+    sourceAddress: publicKey,
+  });
 
   if (!isReady || !isAuthenticated) {
     return null;
@@ -555,6 +642,8 @@ export default function FunderDashboardPage() {
           <FunderSubnav />
 
           <FunderVendorApprovals onRegistryChange={reloadVerifiedVendors} />
+
+          <EscrowNotificationList notifications={escrowNotifications} />
 
           <div className="mb-8">
             <FeedbackPanel feedback={feedback} />
@@ -616,7 +705,8 @@ export default function FunderDashboardPage() {
                   <p className="text-sm text-zinc-400">
                     No escrow found for this ID.
                   </p>
-                ) : escrowState ? (
+                ) : escrowState && loadedEscrowId ? (
+                  <>
                   <dl className="grid gap-4 sm:grid-cols-2">
                     <div>
                       <dt className="text-xs uppercase tracking-wide text-zinc-500">
@@ -674,6 +764,13 @@ export default function FunderDashboardPage() {
                       </dd>
                     </div>
                   </dl>
+                  <EscrowAuditHistory
+                    escrowId={loadedEscrowId}
+                    refreshKey={historyRevision}
+                    status={escrowState.status}
+                    balanceXlm={stroopsToXlmDisplay(escrowState.amount)}
+                  />
+                  </>
                 ) : null}
               </div>
             </section>
