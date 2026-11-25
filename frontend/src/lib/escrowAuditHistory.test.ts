@@ -4,9 +4,13 @@ import {
   AUDIT_HISTORY_ERROR_MESSAGE,
   AUDIT_OPERATION_LABELS,
   AUDIT_TIMESTAMP_LABELS,
+  HISTORY_REFRESH_FAILED_NOTE,
   PRE_AUDIT_EMPTY_MESSAGE,
   UNVERIFIED_HISTORY_MESSAGE,
   auditHistoryView,
+  compactHistorySummary,
+  historyEscrowId,
+  historyRefreshNote,
   parseEscrowAuditHistory,
   type EscrowAuditRecord,
 } from "./escrowAuditHistory.ts";
@@ -108,6 +112,53 @@ describe("escrow audit history display", () => {
       view.omittedMessage,
       "Some stored audit records could not be re-verified and were omitted.",
     );
+  });
+
+  it("keeps a collapsed summary free of invented events", () => {
+    assert.equal(
+      compactHistorySummary({ loaded: false, loading: false, error: null, recordCount: 0 }),
+      "Verified history is collapsed",
+    );
+    assert.equal(
+      compactHistorySummary({ loaded: true, loading: false, error: null, recordCount: 0 }),
+      "No verified events yet",
+    );
+    assert.equal(
+      compactHistorySummary({ loaded: true, loading: false, error: null, recordCount: 2 }),
+      "2 verified events",
+    );
+    assert.equal(
+      compactHistorySummary({
+        loaded: false,
+        loading: false,
+        error: AUDIT_HISTORY_ERROR_MESSAGE,
+        recordCount: 0,
+      }),
+      "History could not be loaded",
+    );
+    assert.equal(
+      compactHistorySummary({
+        loaded: true,
+        loading: false,
+        error: AUDIT_HISTORY_ERROR_MESSAGE,
+        recordCount: 2,
+      }),
+      "2 verified events",
+    );
+    assert.equal(
+      historyRefreshNote({ loaded: true, error: AUDIT_HISTORY_ERROR_MESSAGE }),
+      HISTORY_REFRESH_FAILED_NOTE,
+    );
+    assert.equal(historyRefreshNote({ loaded: false, error: AUDIT_HISTORY_ERROR_MESSAGE }), null);
+    assert.equal(historyRefreshNote({ loaded: true, error: null }), null);
+  });
+
+  it("scopes a history request to one canonical escrow id", () => {
+    assert.equal(historyEscrowId("01"), "1");
+    assert.equal(historyEscrowId("42"), "42");
+    assert.equal(historyEscrowId(""), null);
+    assert.equal(historyEscrowId("1.5"), null);
+    assert.equal(historyEscrowId("999999999999999999999"), null);
   });
 
   it("rejects a payload that leaks an envelope or misstates verification", () => {

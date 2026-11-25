@@ -23,6 +23,9 @@ export const UNVERIFIED_HISTORY_MESSAGE =
 export const AUDIT_HISTORY_ERROR_MESSAGE =
   "Audit history could not be loaded. The on-chain status and balance above are unchanged.";
 
+export const HISTORY_REFRESH_FAILED_NOTE =
+  "Refresh failed. Showing the last verified result.";
+
 export type AuditOperation = keyof typeof AUDIT_OPERATION_LABELS;
 export type AuditTimestampSource = keyof typeof AUDIT_TIMESTAMP_LABELS;
 
@@ -135,6 +138,53 @@ export type AuditHistoryView =
   | { kind: "error"; message: string }
   | { kind: "empty"; message: string }
   | { kind: "records"; records: EscrowAuditRecord[]; omittedMessage: string | null };
+
+/**
+ * Compact line shown while a history dropdown is collapsed. A count appears
+ * only after a verified payload has loaded.
+ */
+export function compactHistorySummary(input: {
+  loaded: boolean;
+  loading: boolean;
+  error: string | null;
+  recordCount: number;
+}): string {
+  if (input.error && !input.loaded) {
+    return "History could not be loaded";
+  }
+  if (!input.loaded) {
+    return input.loading ? "Loading verified history…" : "Verified history is collapsed";
+  }
+  if (input.recordCount <= 0) {
+    return "No verified events yet";
+  }
+  return input.recordCount === 1
+    ? "1 verified event"
+    : `${input.recordCount} verified events`;
+}
+
+/** Short note when a later refresh fails and the last verified count stays. */
+export function historyRefreshNote(input: {
+  loaded: boolean;
+  error: string | null;
+}): string | null {
+  if (!input.loaded || !input.error) {
+    return null;
+  }
+  return HISTORY_REFRESH_FAILED_NOTE;
+}
+
+/** Canonical escrow id for a history request, or null when the id is not a safe integer. */
+export function historyEscrowId(raw: string): string | null {
+  if (!/^\d+$/.test(raw)) {
+    return null;
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed)) {
+    return null;
+  }
+  return String(parsed);
+}
 
 /**
  * Chooses the history panel from a verified payload. An unfamiliar empty

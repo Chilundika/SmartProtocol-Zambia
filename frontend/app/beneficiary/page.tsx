@@ -1009,12 +1009,6 @@ export default function BeneficiarySignoffPage() {
                       </dd>
                     </div>
                   </dl>
-                  <EscrowAuditHistory
-                    escrowId={loadedEscrowId}
-                    refreshKey={historyRevision}
-                    status={escrowState.status}
-                    balanceXlm={stroopsToXlmDisplay(escrowState.amount)}
-                  />
                   </>
                 ) : null}
               </section>
@@ -1091,6 +1085,25 @@ export default function BeneficiarySignoffPage() {
                   </button>
                 </form>
               </section>
+
+              {loadedEscrowId && escrowState ? (
+                <EscrowAuditHistory
+                  escrowId={loadedEscrowId}
+                  refreshKey={historyRevision}
+                  status={escrowState.status}
+                  balanceXlm={stroopsToXlmDisplay(escrowState.amount)}
+                  title="Approval history"
+                  loadWhen="visible"
+                  standalone
+                />
+              ) : (
+                <section className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-5 shadow-lg sm:p-6">
+                  <h2 className="text-sm font-semibold text-white">Approval history</h2>
+                  <p className="mt-2 text-sm text-zinc-400">
+                    Load an escrow to see its verified approval history.
+                  </p>
+                </section>
+              )}
             </>
         </main>
 

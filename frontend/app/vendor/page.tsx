@@ -9,8 +9,10 @@ import {
   type EscrowState,
   type EscrowStatusOnChain,
 } from "@/src/blockchain/stellarClient";
+import { EscrowAuditHistory } from "@/src/components/EscrowAuditHistory";
 import { Navbar } from "@/src/components/Navbar";
 import { useVendorWallet } from "@/src/context/VendorWalletContext";
+import { historyEscrowId } from "@/src/lib/escrowAuditHistory";
 import {
   addWatchedEscrowId,
   getVendorPayoutAddress,
@@ -26,6 +28,30 @@ interface TrackedEscrow {
   exists: boolean;
   escrow?: EscrowState;
   error?: string;
+}
+
+function VendorEscrowHistory({
+  escrowId,
+  status,
+  amount,
+}: {
+  escrowId: string;
+  status: EscrowStatusOnChain;
+  amount: bigint;
+}) {
+  const historyId = historyEscrowId(escrowId);
+  if (!historyId) {
+    return null;
+  }
+
+  return (
+    <EscrowAuditHistory
+      escrowId={historyId}
+      refreshKey={`${status}:${amount.toString()}`}
+      status={status}
+      balanceXlm={stroopsToXlmDisplay(amount)}
+    />
+  );
 }
 
 function stroopsToXlmDisplay(stroops: bigint): string {
@@ -615,6 +641,11 @@ export default function VendorDashboardPage() {
                           </dd>
                         </div>
                       </dl>
+                      <VendorEscrowHistory
+                        escrowId={item.escrowId}
+                        status={item.escrow.status}
+                        amount={item.escrow.amount}
+                      />
                     </div>
                   )}
                 </li>
