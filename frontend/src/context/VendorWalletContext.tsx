@@ -7,6 +7,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -71,96 +72,116 @@ export function VendorWalletProvider({ children }: { children: ReactNode }) {
   const [keypair, setKeypair] = useState<Keypair | null>(null);
   const [isBusy, setIsBusy] = useState(false);
   const [isReady, setIsReady] = useState(false);
+  const activeTpinRef = useRef<string | null>(null);
 
-  useEffect(() => {
-    const sessionTpin = getActiveVendorTpin();
-    if (!sessionTpin) {
-      setIsReady(true);
-      return undefined;
-    }
+  const clearSessionState = useCallback(() => {
+    activeTpinRef.current = null;
+    setActiveTpin(null);
+    setProfile(null);
+    setPublicKey(null);
+    setKeypair(null);
+  }, []);
 
-    const snapshot = getActiveVendorSnapshot();
-    if (snapshot) {
-      applySession(sessionTpin, snapshot, null, {
+  const applyCurrentSession = useCallback(
+    (tpin: string, nextProfile: VendorProfile, nextKeypair: Keypair | null) => {
+      activeTpinRef.current = tpin;
+      applySession(tpin, nextProfile, nextKeypair, {
         setActiveTpin,
         setProfile,
         setPublicKey,
         setKeypair,
       });
-      setIsReady(true);
-    }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
 
     const hydrate = () => {
+      const sessionTpin = getActiveVendorTpin();
+      activeTpinRef.current = sessionTpin;
+      if (!sessionTpin) {
+        clearSessionState();
+        setIsReady(true);
+        return;
+      }
+
+      const snapshot = getActiveVendorSnapshot();
+      const hasMatchingSnapshot = snapshot?.tpin === sessionTpin;
+      if (hasMatchingSnapshot && snapshot) {
+        applyCurrentSession(sessionTpin, snapshot, null);
+        setIsReady(true);
+      }
+
       void getVendorProfile(sessionTpin)
         .then((latest) => {
-          if (!latest) {
-            signOutVendorSession();
-            setActiveTpin(null);
-            setProfile(null);
-            setPublicKey(null);
-            setKeypair(null);
+          if (
+            cancelled ||
+            activeTpinRef.current !== sessionTpin ||
+            getActiveVendorTpin() !== sessionTpin
+          ) {
             return;
           }
 
-          applySession(sessionTpin, latest, null, {
-            setActiveTpin,
-            setProfile,
-            setPublicKey,
-            setKeypair,
-          });
+          if (!latest) {
+            signOutVendorSession();
+            clearSessionState();
+            return;
+          }
+
+          applyCurrentSession(sessionTpin, latest, null);
         })
         .catch(() => {
-          if (!snapshot) {
+          if (
+            !cancelled &&
+            activeTpinRef.current === sessionTpin &&
+            !hasMatchingSnapshot
+          ) {
             signOutVendorSession();
+            clearSessionState();
           }
         })
         .finally(() => {
-          setIsReady(true);
+          if (!cancelled) {
+            setIsReady(true);
+          }
         });
     };
 
     hydrate();
-    return subscribeVendorRegistry(hydrate);
-  }, []);
+    const unsubscribe = subscribeVendorRegistry(hydrate);
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [applyCurrentSession, clearSessionState]);
 
   const signUp = useCallback(async (input: VendorRegistrationInput) => {
     setIsBusy(true);
     try {
       const created = await createVendorAccount(input);
       const session = await loginVendorAccount(created.tpin, input.pin);
-      applySession(session.tpin, session.profile, session.keypair, {
-        setActiveTpin,
-        setProfile,
-        setPublicKey,
-        setKeypair,
-      });
+      applyCurrentSession(session.tpin, session.profile, session.keypair);
     } finally {
       setIsBusy(false);
     }
-  }, []);
+  }, [applyCurrentSession]);
 
   const login = useCallback(async (tpin: string, pin: string) => {
     setIsBusy(true);
     try {
       const session = await loginVendorAccount(tpin, pin);
-      applySession(session.tpin, session.profile, session.keypair, {
-        setActiveTpin,
-        setProfile,
-        setPublicKey,
-        setKeypair,
-      });
+      applyCurrentSession(session.tpin, session.profile, session.keypair);
     } finally {
       setIsBusy(false);
     }
-  }, []);
+  }, [applyCurrentSession]);
 
   const signOut = useCallback(() => {
     signOutVendorSession();
-    setActiveTpin(null);
-    setProfile(null);
-    setPublicKey(null);
-    setKeypair(null);
-  }, []);
+    clearSessionState();
+  }, [clearSessionState]);
 
   const deleteAccountHandler = useCallback(async () => {
     if (!activeTpin) {
@@ -169,11 +190,8 @@ export function VendorWalletProvider({ children }: { children: ReactNode }) {
 
     await deleteStoredVendor(activeTpin);
     signOutVendorSession();
-    setActiveTpin(null);
-    setProfile(null);
-    setPublicKey(null);
-    setKeypair(null);
-  }, [activeTpin]);
+    clearSessionState();
+  }, [activeTpin, clearSessionState]);
 
   const unlockWithPin = useCallback(async (pin: string) => {
     setIsBusy(true);
@@ -190,7 +208,11 @@ export function VendorWalletProvider({ children }: { children: ReactNode }) {
     if (!activeTpin) {
       return;
     }
-    const stored = await getVendorProfile(activeTpin);
+    const sessionTpin = activeTpin;
+    const stored = await getVendorProfile(sessionTpin);
+    if (activeTpinRef.current !== sessionTpin) {
+      return;
+    }
     if (stored) {
       setProfile(stored);
       setPublicKey(stored.publicKey);
