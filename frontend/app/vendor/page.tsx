@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   getEscrowState,
@@ -30,6 +30,11 @@ interface TrackedEscrow {
   error?: string;
 }
 
+interface WatchlistRefreshOptions {
+  silent?: boolean;
+  shouldApply?: () => boolean;
+}
+
 function VendorEscrowHistory({
   escrowId,
   status,
@@ -51,6 +56,14 @@ function VendorEscrowHistory({
       status={status}
       balanceXlm={stroopsToXlmDisplay(amount)}
     />
+  );
+}
+
+function isCompletedPayout(item: TrackedEscrow): boolean {
+  return (
+    item.exists &&
+    item.escrow?.status === "Released" &&
+    item.escrow.amount === BigInt(0)
   );
 }
 
@@ -126,6 +139,74 @@ function StatusTrack({ status }: { status: EscrowStatusOnChain }) {
   );
 }
 
+function VendorEscrowCard({ item }: { item: TrackedEscrow }) {
+  return (
+    <li className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="font-mono text-sm font-semibold text-sky-200">
+          Escrow {item.escrowId}
+        </p>
+        {item.escrow ? (
+          <span
+            className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${statusBadgeClass(item.escrow.status)}`}
+          >
+            {item.escrow.status}
+          </span>
+        ) : null}
+      </div>
+
+      {item.error ? (
+        <p className="mt-3 text-sm text-red-300">{item.error}</p>
+      ) : !item.exists || !item.escrow ? (
+        <p className="mt-3 text-sm text-zinc-500">
+          No on-chain record for this ID.
+        </p>
+      ) : (
+        <div className="mt-4 space-y-4">
+          <StatusTrack status={item.escrow.status} />
+          <dl className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <dt className="text-xs uppercase tracking-wide text-zinc-500">
+                Locked amount
+              </dt>
+              <dd className="mt-1 text-sm font-semibold text-white">
+                {stroopsToXlmDisplay(item.escrow.amount)} XLM
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs uppercase tracking-wide text-zinc-500">
+                Dispatch confidence
+              </dt>
+              <dd className="mt-1 text-sm text-zinc-200">
+                {item.escrow.status === "Locked"
+                  ? "Record only — do not dispatch yet"
+                  : item.escrow.status === "Pending"
+                    ? "Funds locked — safe to prepare dispatch"
+                    : item.escrow.amount > BigInt(0)
+                      ? "Proof submitted — payout pending"
+                      : "Payout complete"}
+              </dd>
+            </div>
+            <div className="sm:col-span-2">
+              <dt className="text-xs uppercase tracking-wide text-zinc-500">
+                Beneficiary
+              </dt>
+              <dd className="mt-1 break-all font-mono text-xs text-zinc-400">
+                {item.escrow.recipient}
+              </dd>
+            </div>
+          </dl>
+          <VendorEscrowHistory
+            escrowId={item.escrowId}
+            status={item.escrow.status}
+            amount={item.escrow.amount}
+          />
+        </div>
+      )}
+    </li>
+  );
+}
+
 export default function VendorDashboardPage() {
   const router = useRouter();
   const {
@@ -149,6 +230,11 @@ export default function VendorDashboardPage() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [newPayoutAddress, setNewPayoutAddress] = useState("");
   const [payoutMessage, setPayoutMessage] = useState<string | null>(null);
+  const [showCompletedPayouts, setShowCompletedPayouts] = useState(false);
+  const fetchInFlightRef = useRef(false);
+
+  const watchedIdsKey = profile?.watchedEscrowIds.join(",") ?? "";
+  const vendorPayoutAddress = profile ? getVendorPayoutAddress(profile) : "";
 
   useEffect(() => {
     if (isReady && !isAuthenticated) {
@@ -178,9 +264,16 @@ export default function VendorDashboardPage() {
   );
 
   const refreshWatchlist = useCallback(
-    async (ids: string[], source: string, vendorAddress: string) => {
-      setIsRefreshing(true);
-      setError(null);
+    async (
+      ids: string[],
+      source: string,
+      vendorAddress: string,
+      options: WatchlistRefreshOptions = {},
+    ) => {
+      if (!options.silent) {
+        setIsRefreshing(true);
+        setError(null);
+      }
 
       try {
         const uniqueIds = [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
@@ -195,28 +288,93 @@ export default function VendorDashboardPage() {
           return item.escrow.vendor === vendorAddress;
         });
 
-        setTracked(matching);
+        if (options.shouldApply?.() ?? true) {
+          setTracked(matching);
+        }
       } finally {
-        setIsRefreshing(false);
+        if (!options.silent) {
+          setIsRefreshing(false);
+        }
       }
     },
     [loadEscrow],
   );
 
   useEffect(() => {
-    if (!publicKey || !profile) {
+    if (!publicKey || !vendorPayoutAddress) {
       return;
     }
-    if (profile.watchedEscrowIds.length === 0) {
+    if (!watchedIdsKey) {
       setTracked([]);
       return;
     }
     void refreshWatchlist(
-      profile.watchedEscrowIds,
+      watchedIdsKey.split(","),
       publicKey,
-      getVendorPayoutAddress(profile),
+      vendorPayoutAddress,
     );
-  }, [profile, publicKey, refreshWatchlist]);
+  }, [publicKey, refreshWatchlist, vendorPayoutAddress, watchedIdsKey]);
+
+  useEffect(() => {
+    if (!isReady || !isAuthenticated || !publicKey || !vendorPayoutAddress) {
+      return;
+    }
+
+    let cancelled = false;
+    const poll = async () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        return;
+      }
+      if (fetchInFlightRef.current) {
+        return;
+      }
+
+      fetchInFlightRef.current = true;
+      try {
+        await refreshProfile();
+        const watchedIds = watchedIdsKey ? watchedIdsKey.split(",") : [];
+        if (watchedIds.length === 0) {
+          if (!cancelled) {
+            setTracked([]);
+          }
+          return;
+        }
+        await refreshWatchlist(watchedIds, publicKey, vendorPayoutAddress, {
+          silent: true,
+          shouldApply: () => !cancelled,
+        });
+      } catch (pollError) {
+        if (!cancelled) {
+          console.error("[vendor] background refresh failed", pollError);
+        }
+      } finally {
+        fetchInFlightRef.current = false;
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void poll();
+      }
+    };
+
+    const interval = window.setInterval(() => void poll(), 6000);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [
+    isAuthenticated,
+    isReady,
+    publicKey,
+    refreshProfile,
+    refreshWatchlist,
+    vendorPayoutAddress,
+    watchedIdsKey,
+  ]);
 
   const handleLookup = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -322,7 +480,7 @@ export default function VendorDashboardPage() {
     return null;
   }
 
-  const payoutAddress = getVendorPayoutAddress(profile);
+  const payoutAddress = vendorPayoutAddress;
   const matchingEscrows = tracked.filter(
     (item) => item.exists && item.escrow?.vendor === payoutAddress,
   );
@@ -331,6 +489,8 @@ export default function VendorDashboardPage() {
       item.escrow?.status === "Pending" &&
       (item.escrow.amount ?? BigInt(0)) > BigInt(0),
   );
+  const completedPayouts = tracked.filter(isCompletedPayout);
+  const activeEscrows = tracked.filter((item) => !isCompletedPayout(item));
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
@@ -570,87 +730,62 @@ export default function VendorDashboardPage() {
                 Escrows for this vendor
               </h2>
               <p className="text-xs text-zinc-500">
-                {fundedReadyToDispatch.length} funded and waiting for delivery
+                {activeEscrows.length} active · {fundedReadyToDispatch.length} funded and waiting for delivery
               </p>
             </div>
 
-            {matchingEscrows.length === 0 && tracked.length === 0 ? (
+            {activeEscrows.length === 0 && completedPayouts.length === 0 ? (
               <p className="mt-5 text-sm text-zinc-500">
                 No watched escrows yet. Look up an Escrow ID, or wait for a
                 funder to initialize one with your verified address.
               </p>
             ) : null}
 
-            <ul className="mt-5 space-y-4">
-              {tracked.map((item) => (
-                <li
-                  key={item.escrowId}
-                  className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4"
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="font-mono text-sm font-semibold text-sky-200">
-                      Escrow {item.escrowId}
-                    </p>
-                    {item.escrow ? (
-                      <span
-                        className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${statusBadgeClass(item.escrow.status)}`}
-                      >
-                        {item.escrow.status}
-                      </span>
-                    ) : null}
-                  </div>
+            {activeEscrows.length > 0 ? (
+              <ul className="mt-5 space-y-4">
+                {activeEscrows.map((item) => (
+                  <VendorEscrowCard key={item.escrowId} item={item} />
+                ))}
+              </ul>
+            ) : completedPayouts.length > 0 ? (
+              <p className="mt-5 text-sm text-zinc-500">
+                No active escrows. Completed payouts are available below.
+              </p>
+            ) : null}
 
-                  {item.error ? (
-                    <p className="mt-3 text-sm text-red-300">{item.error}</p>
-                  ) : !item.exists || !item.escrow ? (
-                    <p className="mt-3 text-sm text-zinc-500">
-                      No on-chain record for this ID.
+            {completedPayouts.length > 0 ? (
+              <section className="mt-5 border-t border-zinc-800 pt-5">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-semibold text-white">
+                      Completed payouts
+                    </h3>
+                    <p className="mt-1 text-xs text-zinc-500">
+                      {completedPayouts.length} completed {completedPayouts.length === 1 ? "escrow" : "escrows"}
                     </p>
-                  ) : (
-                    <div className="mt-4 space-y-4">
-                      <StatusTrack status={item.escrow.status} />
-                      <dl className="grid gap-3 sm:grid-cols-2">
-                        <div>
-                          <dt className="text-xs uppercase tracking-wide text-zinc-500">
-                            Locked amount
-                          </dt>
-                          <dd className="mt-1 text-sm font-semibold text-white">
-                            {stroopsToXlmDisplay(item.escrow.amount)} XLM
-                          </dd>
-                        </div>
-                        <div>
-                          <dt className="text-xs uppercase tracking-wide text-zinc-500">
-                            Dispatch confidence
-                          </dt>
-                          <dd className="mt-1 text-sm text-zinc-200">
-                            {item.escrow.status === "Locked"
-                              ? "Record only — do not dispatch yet"
-                              : item.escrow.status === "Pending"
-                                ? "Funds locked — safe to prepare dispatch"
-                                : item.escrow.amount > BigInt(0)
-                                  ? "Proof submitted — payout pending"
-                                  : "Payout complete"}
-                          </dd>
-                        </div>
-                        <div className="sm:col-span-2">
-                          <dt className="text-xs uppercase tracking-wide text-zinc-500">
-                            Beneficiary
-                          </dt>
-                          <dd className="mt-1 break-all font-mono text-xs text-zinc-400">
-                            {item.escrow.recipient}
-                          </dd>
-                        </div>
-                      </dl>
-                      <VendorEscrowHistory
-                        escrowId={item.escrowId}
-                        status={item.escrow.status}
-                        amount={item.escrow.amount}
-                      />
-                    </div>
-                  )}
-                </li>
-              ))}
-            </ul>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowCompletedPayouts((visible) => !visible)}
+                    aria-expanded={showCompletedPayouts}
+                    aria-controls="completed-vendor-escrows"
+                    className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs font-semibold text-zinc-200 transition hover:border-emerald-400 hover:text-emerald-200 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:ring-offset-2 focus:ring-offset-zinc-900"
+                  >
+                    {showCompletedPayouts ? "Hide completed" : "Show completed"}
+                  </button>
+                </div>
+
+                <ul
+                  id="completed-vendor-escrows"
+                  className="mt-4 space-y-4"
+                  hidden={!showCompletedPayouts}
+                >
+                  {completedPayouts.map((item) => (
+                    <VendorEscrowCard key={item.escrowId} item={item} />
+                  ))}
+                </ul>
+              </section>
+            ) : null}
           </section>
         </main>
       </div>
